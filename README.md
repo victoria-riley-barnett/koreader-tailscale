@@ -26,10 +26,10 @@ Secure remote access and file synchronization for your Kindle using Tailscale VP
 1. **Get Auth Key**:
    - Create a reusable auth key at [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
    - Copy the key (starts with `tskey-`).
-   - 
+   - Save the key as auth.key
 
 2. **Configure Auth Key**:
-   - Save the key to `/mnt/us/tailscale/bin/auth.key`:
+   - Copy the auth.key file to `/mnt/us/tailscale/bin/auth.key`:
      ```sh
      scp -P 2222 auth.key user@kindle-ip:/mnt/us/tailscale/bin/auth.key
      ```
