@@ -1,5 +1,4 @@
 #!/bin/sh
-# Start Tailscale for KOReader plugin
 cd /mnt/us/tailscale/bin
 
 # Check binaries exist

@@ -5,7 +5,7 @@ Secure remote access and file synchronization for your Kindle using Tailscale VP
 ## Features
 
 - **Secure Remote Access**: Access your Kindle from anywhere via Tailscale VPN.
-- **File Synchronization**: Use Syncthing for file transfers without being on the same network over Tailscale.
+- **File Synchronization**: Use Syncthing for file transfers **without being on the same network** thanks to Tailscale.
 
 ## Prerequisites
 
@@ -26,6 +26,7 @@ Secure remote access and file synchronization for your Kindle using Tailscale VP
 1. **Get Auth Key**:
    - Create a reusable auth key at [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
    - Copy the key (starts with `tskey-`).
+   - 
 
 2. **Configure Auth Key**:
    - Save the key to `/mnt/us/tailscale/bin/auth.key`:

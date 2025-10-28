@@ -1,11 +1,9 @@
 local DataStorage = require("datastorage")
-local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
 local logger = require("logger")
 local _ = require("gettext")
-local util = require("util")
 local json = require("json")
 
 local TailscalePlugin = WidgetContainer:extend{
@@ -16,8 +14,6 @@ local TailscalePlugin = WidgetContainer:extend{
 function TailscalePlugin:init()
     logger.info("Tailscale plugin initializing")
     self.plugin_dir = DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
-    self.is_running = false
-    self.autosync_on_connect = G_reader_settings and G_reader_settings:isTrue("tailscale_autosync_on_connect") or false
     
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
@@ -25,22 +21,14 @@ function TailscalePlugin:init()
 end
 
 function TailscalePlugin:isRunning()
-    -- Process check using pgrep if available
+    -- Use pgrep for a simple, fast check. Return boolean.
     local handle = io.popen("pgrep tailscaled 2>/dev/null")
-    if handle then
-        local result = handle:read("*a")
-        handle:close()
-        return result and result ~= ""
+    if not handle then
+        return false
     end
-    
-    -- Fallback to grep if pgrep not available
-    local ps_check = io.popen("ps aux | grep tailscaled | grep -v grep")
-    local ps_result = ""
-    if ps_check then
-        ps_result = ps_check:read("*a")
-        ps_check:close()
-    end
-    return ps_result and ps_result ~= ""
+    local result = handle:read("*a")
+    handle:close()
+    return result and result ~= ""
 end
 
 function TailscalePlugin:onToggleTailscale(callback)
@@ -194,15 +182,10 @@ function TailscalePlugin:runInstallation()
     
     if bin_result and bin_result ~= "" then
         -- Check if daemon auto-started
-        local ps_check = io.popen("ps aux | grep tailscaled | grep -v grep")
-        local ps_result = ""
-        if ps_check then
-            ps_result = ps_check:read("*a")
-            ps_check:close()
-        end
-        
+        local daemon_running = self:isRunning()
+
         local message = _("Installation complete!\nTailscale binaries installed.")
-        if ps_result and ps_result ~= "" then
+        if daemon_running then
             message = message .. _("\nDaemon auto-started.")
         else
             message = message .. _("\nAdd Auth Key + Start daemon to connect.")
@@ -260,12 +243,7 @@ function TailscalePlugin:connectTailscale()
         timeout = 4
     })
 
-    if self.autosync_on_connect then
-        -- Give the daemon a few seconds to settle, then kick off sync
-        UIManager:scheduleIn(5, function()
-            self:syncNow()
-        end)
-    end
+    -- autosync-on-connect removed: sync must be triggered manually if desired
 end
 
 function TailscalePlugin:disconnectTailscale()
@@ -294,15 +272,10 @@ function TailscalePlugin:showStatus()
     end
 
     -- Check if daemon is running
-    local ps_check = io.popen("ps aux | grep tailscaled | grep -v grep")
-    local ps_result = ""
-    if ps_check then
-        ps_result = ps_check:read("*a")
-        ps_check:close()
-    end
+    local daemon_running = self:isRunning()
 
     local lines = {}
-    table.insert(lines, (ps_result and ps_result ~= "") and "Daemon: Running" or "Daemon: Not running")
+    table.insert(lines, daemon_running and "Daemon: Running" or "Daemon: Not running")
 
     -- Prefer JSON status to avoid noisy peers/health lines
     local jraw = nil
@@ -409,69 +382,6 @@ function TailscalePlugin:uninstallTailscale()
     UIManager:show(InfoMessage:new{
         text = _("Uninstall complete!\nRestart KOReader to finish cleanup."),
         timeout = 3
-    })
-end
-
--- Sync utilities
-function TailscalePlugin:syncNow()
-    local conf_path = self.plugin_dir .. "/sync.conf"
-    local f = io.open(conf_path, "r")
-    if not f then
-        UIManager:show(InfoMessage:new{ text = _("Sync not configured. Use 'Configure Sync Target' first."), timeout = 4 })
-        return
-    end
-    f:close()
-
-    local start_msg = InfoMessage:new{ text = _("Syncing books..."), timeout = 0 }
-    UIManager:show(start_msg)
-    UIManager:forceRePaint()
-
-    local cmd = self.plugin_dir .. "/bin/sync_docs.sh"
-    local handle = io.popen(cmd .. " 2>&1")
-    local out = ""
-    if handle then
-        out = handle:read("*a") or ""
-        handle:close()
-    end
-
-    if start_msg then UIManager:close(start_msg) end
-
-    local n = out:match("SYNC_OK%s+(%d+)")
-    if n then
-        UIManager:show(InfoMessage:new{ text = string.format(_("Sync complete. %s files updated."), n), timeout = 4 })
-    else
-        UIManager:show(InfoMessage:new{ text = _("Sync completed."), timeout = 3 })
-    end
-end
-
-function TailscalePlugin:configureSync()
-    local conf_path = self.plugin_dir .. "/sync.conf"
-    local exists = io.open(conf_path, "r")
-    if exists then exists:close() end
-    if not exists then
-        local tpl = [[# Tailscale sync configuration
-# Required
-SYNC_HOST=
-SYNC_USER=
-REMOTE=/srv/books/export
-
-# Optional
-SYNC_PORT=22
-LOCAL=/mnt/us/documents/Downloads/syncDocs
-INCLUDES=*.epub,*.pdf,*.djvu,*.cbz,*.txt
-# DELETE=true
-# MODE=pull
-]]
-        local wf = io.open(conf_path, "w")
-        if wf then
-            wf:write(tpl)
-            wf:close()
-        end
-    end
-
-    UIManager:show(InfoMessage:new{
-        text = _("Edit sync.conf with your server, user and paths:\n/mnt/us/koreader/plugins/tailscale.koplugin/sync.conf\nThen run 'Sync Books Now'."),
-        timeout = 8
     })
 end
 

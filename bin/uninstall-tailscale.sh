@@ -1,11 +1,11 @@
 #!/bin/sh
-# Uninstall Tailscale (quiet) for KOReader
+# Uninstall Tailscale for KOReader
 set -e
 
 TS_DIR="/mnt/us/tailscale"
 BIN_DIR="$TS_DIR/bin"
 
-# Best-effort stop; be silent (Lua shows messages)
+# Stop Tailscale if running
 if [ -d "$BIN_DIR" ]; then
   (cd "$BIN_DIR" && \
     ./tailscale down >/dev/null 2>&1 || true; \
