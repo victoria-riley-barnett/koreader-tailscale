@@ -16,7 +16,7 @@ sleep 3
 # Connect with auth key if available
 if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
     AUTH_KEY=$(grep "^tskey-" auth.key | head -1 | tr -d ' ' | tr -d '#')
-    ./tailscale up --auth-key="$AUTH_KEY" --hostname=kindle-pw6 --accept-routes > tailscale.log 2>&1
+    ./tailscale up --auth-key="$AUTH_KEY" --hostname=kindle --accept-routes > tailscale.log 2>&1
 else
-    ./tailscale up --hostname=kindle-pw6 --accept-routes > tailscale.log 2>&1
+    ./tailscale up --hostname=kindle --accept-routes > tailscale.log 2>&1
 fi
