@@ -8,7 +8,7 @@ Secure cross-network remote access and file synchronization for your Kindle usin
 ## Prerequisites
 1. **Tailscale Account**: Sign up at [tailscale.com](https://tailscale.com).
 2. **Auth Key**: Create a reusable auth key at [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
-3. **Jailbroken Kindle**: With KOReader installed. Tested on PW6 and PW5.
+3. **Ereader with file and/or ssh access**: With KOReader installed. Tested on Kindle PW6 and PW5, but it might work as far as the armv7 binaries do.
 
 ## Installation
 
