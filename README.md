@@ -30,9 +30,26 @@ Secure cross-network remote access and file synchronization for your Kindle usin
      scp -P 2222 auth.key user@kindle-ip:/mnt/us/tailscale/bin/auth.key
      ```
 
-3. **Start Tailscale**:
+3. **(Optional) Use a self-hosted Headscale server**:
+   - If you run Headscale and want your Kindle to use it instead of tailscale.com, create a file `/mnt/us/tailscale/bin/headscale.url` containing the full Headscale URL (for example: `https://headscale.example.com`).
+   - The plugin exposes a menu item *Set Headscale URL* which shows the currently configured URL and instructions for updating it.
+
+4. **Start Tailscale**:
    - In KOReader: Menu → Network → Tailscale VPN → Toggle "On".
    - Check status via Menu → Network → Tailscale VPN → Status.
+
+### Scripts
+
+- `bin/start_tailscale.sh`: Standard start script. Includes the current device hostname (if present) and uses an `auth.key` when available. Use this for normal Tailscale operation.
+- `bin/start_tailscale_headscale.sh`: Explicit Headscale start script. Reads a Headscale URL from `/mnt/us/tailscale/bin/headscale.url` and passes it to `tailscale up` via `--login-server`. Run this when you manage devices via a self-hosted Headscale server.
+
+To make the scripts executable on the device:
+```sh
+cd /mnt/us/tailscale/bin
+chmod +x start_tailscale.sh start_tailscale_headscale.sh
+```
+
+If you prefer automated behavior, use `start_tailscale.sh`. If you manage devices with Headscale, run `start_tailscale_headscale.sh` explicitly so the script only applies the `--login-server` flag when you opt in.
 
 ## Usage with Syncthing
 1. Note your Kindle's Tailscale IP from the status menu.

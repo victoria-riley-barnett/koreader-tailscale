@@ -78,16 +78,67 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 end
             },
             {
-                text = _("Configure Auth Key"),
-                callback = function()
-                    self:configureAuthKey()
-                end
-            },
-            {
-                text = _("Uninstall Tailscale"),
-                callback = function()
-                    self:uninstallTailscale()
-                end
+                text = _("Settings / Config"),
+                sub_item_table = {
+                    {
+                        text = _("Configure Auth Key"),
+                        callback = function()
+                            self:configureAuthKey()
+                        end
+                    },
+                    {
+                        text = _("Headscale URL info"),
+                        callback = function()
+                            self:configureHeadscale()
+                        end
+                    },
+                    {
+                        text = _("Start with Headscale"),
+                        callback = function()
+                            -- Ensure a Headscale URL is configured before attempting to start
+                            local cfg_path = self.plugin_dir .. "/headscale.url"
+                            local system_path = "/mnt/us/tailscale/bin/headscale.url"
+                            local val = nil
+                            local f = io.open(cfg_path, "r")
+                            if not f then f = io.open(system_path, "r") end
+                            if f then
+                                val = f:read("*a") or ""
+                                f:close()
+                                val = val:gsub("%s+$", "")
+                            end
+
+                            if not val or val == "" then
+                                UIManager:show(InfoMessage:new{
+                                    text = _("No Headscale URL configured. Open 'Headscale URL info' to add one before starting."),
+                                    timeout = 6
+                                })
+                                return
+                            end
+
+                            local script = self.plugin_dir .. "/bin/start_tailscale_headscale.sh"
+                            local s = io.open(script, "r")
+                            if s then
+                                s:close()
+                                os.execute(script)
+                                UIManager:show(InfoMessage:new{
+                                    text = _("Started Tailscale (Headscale)"),
+                                    timeout = 3
+                                })
+                            else
+                                UIManager:show(InfoMessage:new{
+                                    text = _("Headscale start script not found. Place start_tailscale_headscale.sh in plugin bin/"),
+                                    timeout = 6
+                                })
+                            end
+                        end
+                    },
+                    {
+                        text = _("Uninstall Tailscale"),
+                        callback = function()
+                            self:uninstallTailscale()
+                        end
+                    }
+                }
             }
         }
     }
@@ -369,6 +420,37 @@ function TailscalePlugin:configureAuthKey()
             timeout = 8
         })
     end
+end
+
+function TailscalePlugin:configureHeadscale()
+    local cfg_path = self.plugin_dir .. "/headscale.url"
+    local system_path = "/mnt/us/tailscale/bin/headscale.url"
+
+    -- Try to read existing value
+    local f = io.open(cfg_path, "r")
+    local val = nil
+    if not f then
+        -- try system location
+        f = io.open(system_path, "r")
+    end
+    if f then
+        val = f:read("*a") or ""
+        f:close()
+        val = val:gsub("%s+$", "")
+    end
+
+    if val and val ~= "" then
+        UIManager:show(InfoMessage:new{
+            text = string.format(_("Headscale URL is set to:\n%s\n\nTo change it, edit:\n%s\nor\n%s (scp/ssh)"), val, cfg_path, system_path),
+            timeout = 6
+        })
+        return
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = _("No Headscale URL configured.\nTo set one, create the file:\n/mnt/us/tailscale/bin/headscale.url\ncontaining the full URL (eg. https://headscale.example.com)\nYou can SCP the file into place from your workstation."),
+        timeout = 8
+    })
 end
 
 function TailscalePlugin:uninstallTailscale()
