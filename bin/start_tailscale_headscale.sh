@@ -21,7 +21,7 @@ killall tailscaled 2>/dev/null || true
 sleep 2
 
 # Start daemon
-nohup ./tailscaled --statedir=/mnt/us/tailscale/bin/ -tun userspace-networking > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir=/mnt/us/tailscale/bin/ > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
