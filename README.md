@@ -5,7 +5,9 @@ Secure cross-network remote access and file synchronization for your e-reader us
 | Device | Storage Path | Architecture |
 |--------|-------------|-------------|
 | Kindle (PW5, PW6, etc.) | `/mnt/us/tailscale/` | ARM 32-bit |
-| PocketBook (Verse Pro, etc.) | `/mnt/ext1/tailscale/` | ARM 64-bit |
+| PocketBook (Verse Pro, etc.) | `/mnt/ext1/tailscale/` | ARM 32-bit |
+
+> **Note:** The PocketBook Verse Pro has a 64-bit CPU (Cortex-A53) but runs a **32-bit userspace**. The plugin detects the actual architecture at runtime via `uname -m` and downloads the matching binary.
 
 The plugin **auto-detects** your device and uses the correct paths and binary architecture automatically.
 
