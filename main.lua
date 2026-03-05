@@ -1,4 +1,5 @@
 local DataStorage = require("datastorage")
+local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
@@ -11,10 +12,40 @@ local TailscalePlugin = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+--- Detect CPU architecture for Tailscale binary download.
+function TailscalePlugin:detectArch()
+    local handle = io.popen("uname -m 2>/dev/null")
+    if handle then
+        local machine = handle:read("*a") or ""
+        handle:close()
+        machine = machine:gsub("%s+$", "")
+        if machine == "aarch64" or machine == "arm64" then
+            return "arm64"
+        end
+    end
+    -- Default to 32-bit ARM (covers armv7l, armv6l, etc.)
+    return "arm"
+end
+
+--- Detect device platform and return base tailscale directory and arch.
+function TailscalePlugin:detectPlatform()
+    local arch = self:detectArch()
+    if Device:isPocketBook() then
+        return "/mnt/ext1/tailscale", arch
+    end
+    -- Default: Kindle
+    return "/mnt/us/tailscale", arch
+end
+
 function TailscalePlugin:init()
     logger.info("Tailscale plugin initializing")
     self.plugin_dir = DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
-    
+
+    -- Detect platform-specific paths
+    self.ts_dir, self.ts_arch = self:detectPlatform()
+    self.ts_bin = self.ts_dir .. "/bin"
+    logger.info("Tailscale plugin: device dir=" .. self.ts_dir .. " arch=" .. self.ts_arch)
+
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
@@ -97,7 +128,7 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         callback = function()
                             -- Ensure a Headscale URL is configured before attempting to start
                             local cfg_path = self.plugin_dir .. "/headscale.url"
-                            local system_path = "/mnt/us/tailscale/bin/headscale.url"
+                            local system_path = self.ts_bin .. "/headscale.url"
                             local val = nil
                             local f = io.open(cfg_path, "r")
                             if not f then f = io.open(system_path, "r") end
@@ -119,7 +150,7 @@ function TailscalePlugin:addToMainMenu(menu_items)
                             local s = io.open(script, "r")
                             if s then
                                 s:close()
-                                os.execute(script)
+                                os.execute(script .. " " .. self.ts_dir)
                                 UIManager:show(InfoMessage:new{
                                     text = _("Started Tailscale (Headscale)"),
                                     timeout = 3
@@ -146,7 +177,7 @@ end
 
 function TailscalePlugin:installTailscale()
     -- First check if binaries already exist
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -202,7 +233,7 @@ function TailscalePlugin:runInstallation()
     local success = false
     
     -- Use a more robust execution method with timeout
-    local cmd = self.plugin_dir .. "/bin/install-tailscale.sh"
+    local cmd = self.plugin_dir .. "/bin/install-tailscale.sh " .. self.ts_dir .. " " .. self.ts_arch
     local handle = io.popen(cmd .. " 2>&1")
     if handle then
         result = handle:read("*a")
@@ -224,7 +255,7 @@ function TailscalePlugin:runInstallation()
     end
     
     -- Check if binaries were actually installed
-    local bin_check = io.popen("ls -la /mnt/us/tailscale/bin/tailscale /mnt/us/tailscale/bin/tailscaled 2>/dev/null")
+    local bin_check = io.popen("ls -la " .. self.ts_bin .. "/tailscale " .. self.ts_bin .. "/tailscaled 2>/dev/null")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -264,7 +295,7 @@ end
 
 function TailscalePlugin:startDaemon()
     -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh " .. self.ts_dir)
     UIManager:show(InfoMessage:new{
         text = _("Tailscale daemon started"),
         timeout = 2
@@ -273,7 +304,7 @@ end
 
 function TailscalePlugin:connectTailscale()
     -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -288,9 +319,9 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh " .. self.ts_dir)
     UIManager:show(InfoMessage:new{
-        text = _("Tailscale connection started\nCheck /mnt/us/tailscale/bin/tailscale.log for status"),
+        text = _("Tailscale connection started\nCheck " .. self.ts_bin .. "/tailscale.log for status"),
         timeout = 4
     })
 
@@ -298,7 +329,7 @@ function TailscalePlugin:connectTailscale()
 end
 
 function TailscalePlugin:disconnectTailscale()
-    os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh " .. self.ts_dir)
     UIManager:show(InfoMessage:new{
         text = _("Tailscale disconnected"),
         timeout = 2
@@ -307,7 +338,7 @@ end
 
 function TailscalePlugin:showStatus()
     -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -330,7 +361,7 @@ function TailscalePlugin:showStatus()
 
     -- Prefer JSON status to avoid noisy peers/health lines
     local jraw = nil
-    local h = io.popen("/mnt/us/tailscale/bin/tailscale status --json 2>/dev/null")
+    local h = io.popen(self.ts_bin .. "/tailscale status --json 2>/dev/null")
     if h then
         jraw = h:read("*a")
         h:close()
@@ -366,7 +397,7 @@ function TailscalePlugin:showStatus()
         end
     else
         -- Fallback: use terse commands without peers
-        local ip_h = io.popen("/mnt/us/tailscale/bin/tailscale ip 2>/dev/null")
+        local ip_h = io.popen(self.ts_bin .. "/tailscale ip 2>/dev/null")
         if ip_h then
             local ips = ip_h:read("*a") or ""
             ip_h:close()
@@ -377,7 +408,7 @@ function TailscalePlugin:showStatus()
             end
         end
         -- Try to get a simple state without peers/health
-        local s_h = io.popen("/mnt/us/tailscale/bin/tailscale status --peers=false 2>/dev/null")
+        local s_h = io.popen(self.ts_bin .. "/tailscale status --peers=false 2>/dev/null")
         if s_h then
             local s = s_h:read("*a") or ""
             s_h:close()
@@ -402,7 +433,7 @@ end
 
 function TailscalePlugin:configureAuthKey()
     -- Check current auth key status
-    local auth_check = io.popen("grep '^tskey-' /mnt/us/tailscale/bin/auth.key 2>/dev/null")
+    local auth_check = io.popen("grep '^tskey-' " .. self.ts_bin .. "/auth.key 2>/dev/null")
     local auth_result = ""
     if auth_check then
         auth_result = auth_check:read("*a")
@@ -416,7 +447,7 @@ function TailscalePlugin:configureAuthKey()
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _("No valid auth key found.\nPlease edit:\n/mnt/us/tailscale/bin/auth.key\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
+            text = _("No valid auth key found.\nPlease edit:\n" .. self.ts_bin .. "/auth.key\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
             timeout = 8
         })
     end
@@ -424,7 +455,7 @@ end
 
 function TailscalePlugin:configureHeadscale()
     local cfg_path = self.plugin_dir .. "/headscale.url"
-    local system_path = "/mnt/us/tailscale/bin/headscale.url"
+    local system_path = self.ts_bin .. "/headscale.url"
 
     -- Try to read existing value
     local f = io.open(cfg_path, "r")
@@ -448,7 +479,7 @@ function TailscalePlugin:configureHeadscale()
     end
 
     UIManager:show(InfoMessage:new{
-        text = _("No Headscale URL configured.\nTo set one, create the file:\n/mnt/us/tailscale/bin/headscale.url\ncontaining the full URL (eg. https://headscale.example.com)\nYou can SCP the file into place from your workstation."),
+        text = _("No Headscale URL configured.\nTo set one, create the file:\n" .. self.ts_bin .. "/headscale.url\ncontaining the full URL (eg. https://headscale.example.com)\nYou can SCP the file into place from your workstation."),
         timeout = 8
     })
 end
@@ -459,7 +490,8 @@ function TailscalePlugin:uninstallTailscale()
         timeout = 3
     })
     
-    os.execute(self.plugin_dir .. "/bin/uninstall-tailscale.sh")
+    local uninstall_cmd = self.plugin_dir .. "/bin/uninstall-tailscale.sh " .. self.ts_dir
+    os.execute(uninstall_cmd)
     
     UIManager:show(InfoMessage:new{
         text = _("Uninstall complete!\nRestart KOReader to finish cleanup."),

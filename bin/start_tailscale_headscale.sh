@@ -1,9 +1,11 @@
 #!/bin/sh
-cd /mnt/us/tailscale/bin || exit 1
+TS_DIR="${1:-/mnt/us/tailscale}"
+BIN_DIR="$TS_DIR/bin"
+cd "$BIN_DIR" || exit 1
 
 # POSIX-friendly headscale-aware start script
 
-HEADSCALE_FILE="/mnt/us/tailscale/bin/headscale.url"
+HEADSCALE_FILE="$BIN_DIR/headscale.url"
 if [ ! -f "$HEADSCALE_FILE" ]; then
     echo "headscale.url not found at $HEADSCALE_FILE" >&2
     exit 2
@@ -20,8 +22,38 @@ HS_URL=$(tr -d '\r\n' < "$HEADSCALE_FILE" 2>/dev/null)
 killall tailscaled 2>/dev/null || true
 sleep 2
 
+# State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
+STATE_DIR="/tmp/tailscale"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+_test_file="$BIN_DIR/.chmod_test_$$"
+if touch "$_test_file" 2>/dev/null && chmod 0600 "$_test_file" 2>/dev/null; then
+    STATE_DIR="$BIN_DIR"
+    rm -f "$_test_file"
+else
+    rm -f "$_test_file" 2>/dev/null
+    for f in tailscaled.state tailscaled.log.conf; do
+        [ -f "$BIN_DIR/$f" ] && cp -f "$BIN_DIR/$f" "$STATE_DIR/$f" 2>/dev/null || true
+    done
+fi
+
+export HOME="$TS_DIR"
+export XDG_CACHE_HOME="$STATE_DIR"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Try to set up TUN device if missing
+TUN_FLAG=""
+if [ ! -c /dev/net/tun ]; then
+    mkdir -p /dev/net 2>/dev/null || true
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 0666 /dev/net/tun 2>/dev/null || true
+fi
+if [ ! -c /dev/net/tun ]; then
+    TUN_FLAG="--tun=userspace-networking"
+fi
+
 # Start daemon
-nohup ./tailscaled --statedir=/mnt/us/tailscale/bin/ > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)

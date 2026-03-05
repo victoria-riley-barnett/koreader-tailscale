@@ -1,5 +1,7 @@
 #!/bin/sh
-cd /mnt/us/tailscale/bin || exit 1
+TS_DIR="${1:-/mnt/us/tailscale}"
+BIN_DIR="$TS_DIR/bin"
+cd "$BIN_DIR" || exit 1
 
 # POSIX-friendly start script for Tailscale (standard)
 
@@ -12,8 +14,43 @@ cd /mnt/us/tailscale/bin || exit 1
 killall tailscaled 2>/dev/null || true
 sleep 2
 
-# Start daemon
-nohup ./tailscaled --statedir=/mnt/us/tailscale/bin/ > tailscaled.log 2>&1 &
+# State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
+# Copy any previous state from persistent storage on startup.
+STATE_DIR="/tmp/tailscale"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Test if persistent storage supports chmod; if so, use it directly
+_test_file="$BIN_DIR/.chmod_test_$$"
+if touch "$_test_file" 2>/dev/null && chmod 0600 "$_test_file" 2>/dev/null; then
+    STATE_DIR="$BIN_DIR"
+    rm -f "$_test_file"
+else
+    rm -f "$_test_file" 2>/dev/null
+    # Copy existing state to tmpfs so we don't lose node identity on restart
+    for f in tailscaled.state tailscaled.log.conf; do
+        [ -f "$BIN_DIR/$f" ] && cp -f "$BIN_DIR/$f" "$STATE_DIR/$f" 2>/dev/null || true
+    done
+fi
+
+# Redirect cache/home to writable storage (needed on PocketBook and similar)
+export HOME="$TS_DIR"
+export XDG_CACHE_HOME="$STATE_DIR"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Try to set up TUN device if missing
+TUN_FLAG=""
+if [ ! -c /dev/net/tun ]; then
+    mkdir -p /dev/net 2>/dev/null || true
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 0666 /dev/net/tun 2>/dev/null || true
+fi
+# If TUN still doesn't exist, fall back to userspace networking
+if [ ! -c /dev/net/tun ]; then
+    TUN_FLAG="--tun=userspace-networking"
+fi
+
+# Start daemon with the appropriate state directory
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG > tailscaled.log 2>&1 &
 
 # Get current hostname (if any)
 HOSTNAME=""
