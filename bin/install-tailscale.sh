@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-TS_VER="1.90.2"
+TS_VER="1.94.2"
 TS_DIR="/mnt/us/tailscale"
 BIN_DIR="$TS_DIR/bin"
 
