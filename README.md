@@ -14,6 +14,7 @@ The plugin **auto-detects** your device and uses the correct paths and binary ar
 ## Features
 - **Secure Remote Access**: Access your e-reader from anywhere via Tailscale VPN.
 - **Cross-network File Synchronization**: Use KOreader [Syncthing](https://github.com/jasonchoimtt/koreader-syncthing) for file transfers **without being on the same network**.
+- **HTTP Proxy for Userspace Mode**: On devices without a TUN kernel module (e.g. PocketBook), the plugin exposes an HTTP CONNECT proxy so KOReader can reach internal services (OPDS, etc.) through Tailscale.
 
 ## Prerequisites
 1. **Tailscale Account**: Sign up at [tailscale.com](https://tailscale.com).
@@ -84,6 +85,26 @@ If you prefer automated behavior, use `start_tailscale.sh`. If you manage device
 - **Status**: Show device IP and info.
 - **Install/Update Tailscale**: Download and install binaries.
 - **Uninstall Tailscale**: Stop and remove Tailscale files (removes auth key).
+- **Proxy for userspace mode** *(Settings/Config submenu)*: Enable/disable the HTTP CONNECT proxy at `127.0.0.1:1055`. See [HTTP Proxy](#http-proxy-for-userspace-mode) below.
+
+---
+
+## HTTP Proxy for Userspace Mode
+
+### Why it exists
+
+The PocketBook Verse Pro does not have the Linux TUN kernel module, so Tailscale cannot create a virtual network interface. Instead it runs in **userspace networking mode**: WireGuard runs entirely in the `tailscaled` process and no routes are added to the kernel's routing table.
+
+This means the device's apps (KOReader included) cannot reach Tailscale peers or subnet-routed IPs through normal TCP connections — there is no `/dev/net/tun` interface to route through.
+
+To work around this, the plugin starts `tailscaled` with `-outbound-http-proxy-listen=127.0.0.1:1055`, which exposes an **HTTP CONNECT proxy** on the loopback interface. Any HTTP client that is configured to use this proxy will have its connections tunnelled through the Tailscale userspace WireGuard stack.
+
+> **PocketBook loopback note**: The PocketBook firmware does not configure the loopback interface at boot. The start script uses a device-specific `sudo ifconfig lo 127.0.0.1 up` (allowed by PocketBook's NOPASSWD sudoers) to bring it up before binding the proxy.
+
+### Enabling the proxy in KOReader
+
+In KOReader: **Menu → Network → Tailscale VPN → Settings/Config → Proxy for userspace mode**
+
 
 ## Files Location
 

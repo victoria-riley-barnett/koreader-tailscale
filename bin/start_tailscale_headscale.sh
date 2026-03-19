@@ -41,6 +41,13 @@ export HOME="$TS_DIR"
 export XDG_CACHE_HOME="$STATE_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
+# Ensure loopback has 127.0.0.1 — required for the HTTP proxy to bind and be reachable.
+# PocketBook firmware does not configure lo at boot; use the device-specific NOPASSWD sudo.
+# Skipped silently on other devices (Kindle, etc.) where lo is already configured.
+if [ -x /ebrmain/cramfs/bin/sudo ]; then
+    /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+fi
+
 # Try to set up TUN device if missing
 TUN_FLAG=""
 if [ ! -c /dev/net/tun ]; then
@@ -55,7 +62,9 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # Start daemon
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG > tailscaled.log 2>&1 &
+# --outbound-http-proxy-listen: HTTP CONNECT proxy so KOReader can reach Tailscale IPs
+#   without a TUN interface (userspace-networking mode).
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG -outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
@@ -73,24 +82,28 @@ if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
 fi
 
 # Build command with login-server
-CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes"
+# --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook)
+CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
 
-# Run and capture exit code
-sh -c "$CMD" > tailscale.log 2>&1
+# Run with stdin from /dev/null to prevent tailscale up from hanging if it
+# needs interactive confirmation (e.g. pref-change prompt in v1.44+)
+sh -c "$CMD" < /dev/null > tailscale.log 2>&1
 RC=$?
 
-# Retry on missing non-default flags by extracting suggested hostname
+# If failed because pref-change confirmation is needed, retry with the suggested hostname.
+# Tailscale v1.44+ prints "tailscale up would change prefs" instead of the older
+# "requires mentioning all non-default flags" message when flags conflict with stored prefs.
 if [ $RC -ne 0 ]; then
-    if grep -q "requires mentioning all non-default flags" tailscale.log 2>/dev/null; then
+    if grep -qE "requires mentioning all non-default flags|would change prefs" tailscale.log 2>/dev/null; then
         SUG_HOST=$(sed -n "s/.*--hostname=\([^[:space:]]*\).*/\1/p" tailscale.log | head -n1)
         if [ -n "$SUG_HOST" ]; then
             HOST_FLAG="--hostname=$SUG_HOST"
-            CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes"
-            [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
-            sh -c "$CMD" > tailscale.log 2>&1
-            RC=$?
         fi
+        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
+        [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
+        sh -c "$CMD" < /dev/null > tailscale.log 2>&1
+        RC=$?
     fi
 fi
 

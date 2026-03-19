@@ -3,9 +3,22 @@ local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local NetworkMgr = require("ui/network/manager")
+local ffi = require("ffi")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
+
+-- Port that tailscaled's HTTP CONNECT proxy listens on (bound to 127.0.0.1).
+-- The start script also ensures loopback is configured before starting tailscaled.
+local TS_PROXY = "127.0.0.1:1055"
+local TS_PROXY_URL = "http://" .. TS_PROXY
+
+-- FFI binding for setenv/unsetenv so we can affect the current process environment.
+ffi.cdef[[
+    int setenv(const char *name, const char *value, int overwrite);
+    int unsetenv(const char *name);
+]]
 
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
@@ -73,6 +86,50 @@ function TailscalePlugin:onToggleTailscale(callback)
     end
 end
 
+function TailscalePlugin:isTailscaleProxyEnabled()
+    local proxy = G_reader_settings:readSetting("http_proxy")
+    local enabled = G_reader_settings:isTrue("http_proxy_enabled")
+    return enabled and proxy == TS_PROXY_URL
+end
+
+function TailscalePlugin:enableTailscaleProxy()
+    G_reader_settings:saveSetting("http_proxy", TS_PROXY_URL)
+    G_reader_settings:saveSetting("http_proxy_enabled", true)
+    if NetworkMgr.setProxyAddress then
+        NetworkMgr:setProxyAddress(TS_PROXY_URL)
+    end
+    if NetworkMgr.setProxyEnabled then
+        NetworkMgr:setProxyEnabled(true)
+    end
+    -- Set process-level env vars for C-based HTTP clients (libcurl, wget, curl subprocesses).
+    ffi.C.setenv("http_proxy",  TS_PROXY_URL, 1)
+    ffi.C.setenv("HTTP_PROXY",  TS_PROXY_URL, 1)
+    ffi.C.setenv("https_proxy", TS_PROXY_URL, 1)
+    ffi.C.setenv("HTTPS_PROXY", TS_PROXY_URL, 1)
+    -- Set LuaSocket's module-level proxy for pure-Lua HTTP clients (OPDS browser).
+    local ok, socket_http = pcall(require, "socket.http")
+    if ok and socket_http then
+        socket_http.PROXY = TS_PROXY_URL
+    end
+end
+
+function TailscalePlugin:disableTailscaleProxy()
+    if G_reader_settings:readSetting("http_proxy") == TS_PROXY_URL then
+        G_reader_settings:saveSetting("http_proxy_enabled", false)
+        if NetworkMgr.setProxyEnabled then
+            NetworkMgr:setProxyEnabled(false)
+        end
+    end
+    ffi.C.unsetenv("http_proxy")
+    ffi.C.unsetenv("HTTP_PROXY")
+    ffi.C.unsetenv("https_proxy")
+    ffi.C.unsetenv("HTTPS_PROXY")
+    local ok, socket_http = pcall(require, "socket.http")
+    if ok and socket_http then
+        socket_http.PROXY = nil
+    end
+end
+
 function TailscalePlugin:onFlushSettings()
     -- Load settings if any
 end
@@ -111,6 +168,34 @@ function TailscalePlugin:addToMainMenu(menu_items)
             {
                 text = _("Settings / Config"),
                 sub_item_table = {
+                    {
+                        text = _("Proxy for userspace mode"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self:isTailscaleProxyEnabled()
+                        end,
+                        callback = function(touchmenu_instance)
+                            if self:isTailscaleProxyEnabled() then
+                                self:disableTailscaleProxy()
+                                UIManager:show(InfoMessage:new{
+                                    text = _("HTTP proxy disabled."),
+                                    timeout = 3
+                                })
+                            else
+                                self:enableTailscaleProxy()
+                                UIManager:show(InfoMessage:new{
+                                    text = _("HTTP proxy enabled: " .. TS_PROXY ..
+                                        "\nKOReader routes HTTP/OPDS through" ..
+                                        "\nTailscale userspace networking." ..
+                                        "\nUse Tailscale IP (100.x.x.x) in OPDS URL."),
+                                    timeout = 6
+                                })
+                            end
+                            if touchmenu_instance then
+                                touchmenu_instance:updateItems()
+                            end
+                        end,
+                    },
                     {
                         text = _("Configure Auth Key"),
                         callback = function()
@@ -330,6 +415,7 @@ end
 
 function TailscalePlugin:disconnectTailscale()
     os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh " .. self.ts_dir)
+    self:disableTailscaleProxy()
     UIManager:show(InfoMessage:new{
         text = _("Tailscale disconnected"),
         timeout = 2
