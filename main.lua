@@ -160,6 +160,12 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 end
             },
             {
+                text = _("Start/Stop Daemon"),
+                callback = function()
+                    self:toggleDaemon()
+                end
+            },
+            {
                 text = _("Install/Update Tailscale"),
                 callback = function()
                     self:installTailscale()
@@ -385,6 +391,24 @@ function TailscalePlugin:startDaemon()
         text = _("Tailscale daemon started"),
         timeout = 2
     })
+end
+
+function TailscalePlugin:stopDaemon()
+    -- Stop full Tailscale (daemon + CLI connect) quietly
+    os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh")
+    UIManager:show(InfoMessage:new{
+        text = _("Tailscale daemon stopped"),
+        timeout = 2
+    })
+end
+
+function TailscalePlugin:toggleDaemon()
+    -- Convenience method to toggle full Tailscale (daemon + CLI connect) status --
+    if self:isRunning() then
+        self:stopDaemon()
+    else
+        self:startDaemon()
+    end
 end
 
 function TailscalePlugin:connectTailscale()
