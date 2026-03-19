@@ -40,6 +40,8 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 # Try to set up TUN device if missing
 TUN_FLAG=""
 if [ ! -c /dev/net/tun ]; then
+    # Try to load the tun kernel module first
+    modprobe tun 2>/dev/null || true
     mkdir -p /dev/net 2>/dev/null || true
     mknod /dev/net/tun c 10 200 2>/dev/null || true
     chmod 0666 /dev/net/tun 2>/dev/null || true
@@ -51,6 +53,9 @@ fi
 
 # Start daemon with the appropriate state directory
 nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG > tailscaled.log 2>&1 &
+
+# Wait for daemon socket to become available
+sleep 3
 
 # Get current hostname (if any)
 HOSTNAME=""

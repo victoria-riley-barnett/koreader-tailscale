@@ -383,16 +383,55 @@ function TailscalePlugin:showStatus()
         end
     end
 
+    -- Show TUN vs userspace networking mode (critical for OPDS/outbound access)
+    local tun_h = io.popen("ip link show tailscale0 2>/dev/null | head -1")
+    if tun_h then
+        local tun_out = tun_h:read("*a") or ""
+        tun_h:close()
+        if tun_out ~= "" then
+            table.insert(lines, "Net mode: TUN (full routing)")
+        else
+            table.insert(lines, "Net mode: Userspace (inbound only!)")
+        end
+    end
+
     if parsed and type(parsed) == "table" then
-        local backend = parsed.BackendState or "Unknown"
+        local backend = type(parsed.BackendState) == "string" and parsed.BackendState or "Unknown"
         table.insert(lines, "State: " .. backend)
         if parsed.Self and type(parsed.Self) == "table" then
-            local ips = parsed.Self.TailscaleIPs or {}
+            local raw_ips = parsed.Self.TailscaleIPs
+            local ips = type(raw_ips) == "table" and raw_ips or {}
             if #ips > 0 then
                 table.insert(lines, "IPs: " .. join(ips, ", "))
             end
-            if parsed.Self.HostName then
-                table.insert(lines, "Device: " .. tostring(parsed.Self.HostName))
+            local hostname = parsed.Self.HostName
+            if type(hostname) == "string" and hostname ~= "" then
+                table.insert(lines, "Device: " .. hostname)
+            end
+        end
+        -- Show online peers (useful for verifying OPDS server is visible)
+        local peer_map = parsed.Peer
+        if type(peer_map) == "table" then
+            local online_peers = {}
+            for _, peer in pairs(peer_map) do
+                if type(peer) == "table" and peer.Online == true then
+                    local hn = type(peer.HostName) == "string" and peer.HostName or "?"
+                    local peer_ips = type(peer.TailscaleIPs) == "table" and peer.TailscaleIPs or {}
+                    local ip_str = #peer_ips > 0 and tostring(peer_ips[1]) or ""
+                    table.insert(online_peers, hn .. (ip_str ~= "" and " " .. ip_str or ""))
+                end
+            end
+            if #online_peers > 0 then
+                local max_show = math.min(3, #online_peers)
+                table.insert(lines, "Online peers (" .. #online_peers .. "):")
+                for i = 1, max_show do
+                    table.insert(lines, "  " .. online_peers[i])
+                end
+                if #online_peers > max_show then
+                    table.insert(lines, "  +" .. (#online_peers - max_show) .. " more")
+                end
+            else
+                table.insert(lines, "Online peers: none")
             end
         end
     else
@@ -412,7 +451,6 @@ function TailscalePlugin:showStatus()
         if s_h then
             local s = s_h:read("*a") or ""
             s_h:close()
-            -- Remove known noisy lines if any slipped through
             local filtered = {}
             for line in s:gmatch("[^\r\n]+") do
                 if not line:match("health") and not line:match("logtail") and not line:match("control:") then
@@ -427,7 +465,7 @@ function TailscalePlugin:showStatus()
 
     UIManager:show(InfoMessage:new{
         text = _("Tailscale Status:\n") .. table.concat(lines, "\n"),
-        timeout = 8
+        timeout = 12
     })
 end
 
