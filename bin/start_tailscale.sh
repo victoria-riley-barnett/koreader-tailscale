@@ -51,18 +51,9 @@ if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
     ip link set lo up 2>/dev/null || true
 fi
 
-# Try to set up TUN device if missing
-TUN_FLAG=""
-if [ ! -c /dev/net/tun ]; then
-    modprobe tun 2>/dev/null || true
-    mkdir -p /dev/net 2>/dev/null || true
-    mknod /dev/net/tun c 10 200 2>/dev/null || true
-    chmod 0666 /dev/net/tun 2>/dev/null || true
-fi
-# If TUN still doesn't exist, fall back to userspace networking
-if [ ! -c /dev/net/tun ]; then
-    TUN_FLAG="--tun=userspace-networking"
-fi
+# Use userspace networking unconditionally — kernel TUN on e-reader devices triggers
+# wgengine watchdog timeouts on Reconfig. Outbound connections work via SOCKS5/HTTP proxy.
+TUN_FLAG="--tun=userspace-networking"
 
 # Start daemon with the appropriate state directory
 # --socks5-server / --outbound-http-proxy-listen: proxies so KOReader can reach

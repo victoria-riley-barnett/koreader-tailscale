@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify version matches tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          META_VER=$(grep -o '"[0-9][^"]*"' _meta.lua | tr -d '"' | head -1)
+          if [ "v${META_VER}" != "${TAG}" ]; then
+            echo "Tag ${TAG} does not match _meta.lua version ${META_VER}"
+            exit 1
+          fi
+
+      - name: Build zip
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ZIP="tailscale.koplugin-${TAG}.zip"
+          mkdir -p /tmp/build/tailscale.koplugin
+          rsync -a --exclude='.git' --exclude='*.zip' --exclude='CLAUDE.md' --exclude='test.sh' \
+            . /tmp/build/tailscale.koplugin/
+          cd /tmp/build
+          zip -r "${ZIP}" tailscale.koplugin/
+          mv "${ZIP}" "${GITHUB_WORKSPACE}/"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          ZIP="tailscale.koplugin-${TAG}.zip"
+          gh release create "${TAG}" "${ZIP}" \
+            --title "${TAG}" \
+            --generate-notes
