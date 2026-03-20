@@ -1,5 +1,5 @@
 #!/bin/sh
-TS_DIR="${1:-/mnt/us/tailscale}"
+TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
 BIN_DIR="$TS_DIR/bin"
 cd "$BIN_DIR" || exit 1
 
@@ -41,9 +41,7 @@ export HOME="$TS_DIR"
 export XDG_CACHE_HOME="$STATE_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Ensure loopback has 127.0.0.1 — required for the HTTP proxy to bind and be reachable.
-# PocketBook firmware does not configure lo at boot; use the device-specific NOPASSWD sudo.
-# Skipped silently on other devices (Kindle, etc.) where lo is already configured.
+# Ensure loopback has 127.0.0.1 (needed on PocketBook)
 if [ -x /ebrmain/cramfs/bin/sudo ]; then
     /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
 fi
@@ -51,7 +49,6 @@ fi
 # Try to set up TUN device if missing
 TUN_FLAG=""
 if [ ! -c /dev/net/tun ]; then
-    # Try to load the tun kernel module first
     modprobe tun 2>/dev/null || true
     mkdir -p /dev/net 2>/dev/null || true
     mknod /dev/net/tun c 10 200 2>/dev/null || true
@@ -62,9 +59,7 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # Start daemon
-# --outbound-http-proxy-listen: HTTP CONNECT proxy so KOReader can reach Tailscale IPs
-#   without a TUN interface (userspace-networking mode).
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG -outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
@@ -86,14 +81,10 @@ fi
 CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
 
-# Run with stdin from /dev/null to prevent tailscale up from hanging if it
-# needs interactive confirmation (e.g. pref-change prompt in v1.44+)
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
 RC=$?
 
 # If failed because pref-change confirmation is needed, retry with the suggested hostname.
-# Tailscale v1.44+ prints "tailscale up would change prefs" instead of the older
-# "requires mentioning all non-default flags" message when flags conflict with stored prefs.
 if [ $RC -ne 0 ]; then
     if grep -qE "requires mentioning all non-default flags|would change prefs" tailscale.log 2>/dev/null; then
         SUG_HOST=$(sed -n "s/.*--hostname=\([^[:space:]]*\).*/\1/p" tailscale.log | head -n1)

@@ -1,9 +1,9 @@
 #!/bin/sh
 set -e
 
-TS_FALLBACK_VER="1.94.2"
-TS_DIR="${1:-/mnt/us/tailscale}"
-TS_ARCH="${2:-arm}"
+TS_FALLBACK_VER="1.96.2"
+TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
+TS_ARCH="${2:-}"
 BIN_DIR="$TS_DIR/bin"
 
 mkdir -p "$BIN_DIR"
@@ -31,10 +31,29 @@ if [ -x ./tailscale ] && [ -x ./tailscaled ]; then
   [ "$CUR_VER" = "$TS_VER" ] && exit 0 || true
 fi
 
+# Detect architecture if not passed as argument
+if [ -z "$TS_ARCH" ]; then
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        aarch64|arm64)
+            TS_ARCH="arm64"
+            ;;
+        armv7l|armv7|armhf)
+            TS_ARCH="arm"
+            ;;
+        armv6l|arm)
+            TS_ARCH="armhf"
+            ;;
+        *)
+            TS_ARCH="arm"
+            ;;
+    esac
+fi
+
 ARCHIVE="tailscale_${TS_ARCH}.tgz"
 rm -f "$ARCHIVE" 2>/dev/null || true
 
-# Try multiple download methods; use the arch passed in
+# Try multiple download methods
 wget -q -O "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || \
 curl -s -o "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || \
 busybox wget -q -O "$ARCHIVE" "http://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || true
@@ -48,4 +67,3 @@ rm -rf tailscale_* 2>/dev/null || true
 chmod +x ./tailscale ./tailscaled 2>/dev/null || true
 [ -f auth.key ] || : > auth.key
 exit 0
-
