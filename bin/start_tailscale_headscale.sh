@@ -78,7 +78,8 @@ fi
 
 # Build command with login-server
 # --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook)
-CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
+# --netfilter-mode=off: avoid nftables/iptables reconfig stalls on constrained e-reader kernels.
+CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
 
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
@@ -91,7 +92,7 @@ if [ $RC -ne 0 ]; then
         if [ -n "$SUG_HOST" ]; then
             HOST_FLAG="--hostname=$SUG_HOST"
         fi
-        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
+        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
         [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
         sh -c "$CMD" < /dev/null > tailscale.log 2>&1
         RC=$?
