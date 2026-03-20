@@ -37,11 +37,18 @@ export HOME="$TS_DIR"
 export XDG_CACHE_HOME="$STATE_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Ensure loopback has 127.0.0.1 — required for the HTTP proxy to bind and be reachable.
-# PocketBook firmware does not configure lo at boot; use the device-specific NOPASSWD sudo.
-# Skipped silently on other devices (Kindle, etc.) where lo is already configured.
-if [ -x /ebrmain/cramfs/bin/sudo ]; then
-    /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+# Ensure loopback has 127.0.0.1 — required for SOCKS5/HTTP proxy to bind.
+# Many e-reader firmwares (PocketBook, Kobo) don't configure lo at boot.
+if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
+    # ifconfig is universal across KOReader's busybox environments
+    ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+    # PocketBook-specific NOPASSWD sudo
+    if [ -x /ebrmain/cramfs/bin/sudo ]; then
+        /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+    fi
+    # iproute2 fallback (reMarkable, Cervantes, desktop Linux)
+    ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
+    ip link set lo up 2>/dev/null || true
 fi
 
 # Try to set up TUN device if missing
@@ -60,7 +67,7 @@ fi
 # Start daemon with the appropriate state directory
 # --socks5-server / --outbound-http-proxy-listen: proxies so KOReader can reach
 #   Tailscale IPs without a TUN interface (userspace-networking mode).
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
+./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 
 # Wait for daemon socket to become available
 sleep 3

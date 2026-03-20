@@ -50,9 +50,9 @@ All configuration files (`auth.key`, `headscale.url`) and logs (`tailscale.log`,
 
 If the device has `/dev/net/tun`, Tailscale uses it normally. If not (common on PocketBook, some Kindles), the plugin falls back to **userspace networking** automatically — no configuration needed.
 
-In userspace mode, apps can't reach Tailscale peers through normal TCP connections. The plugin exposes HTTP CONNECT and SOCKS5 proxies on `127.0.0.1:1055` so KOReader can still reach tailnet services. Enable the proxy in KOReader via **Menu → Network → Tailscale VPN → Settings/Config → Proxy for userspace mode**.
+In userspace mode, apps can't reach Tailscale peers through normal TCP connections. The plugin exposes a SOCKS5 proxy on `127.0.0.1:1055` and an HTTP CONNECT proxy on `127.0.0.1:1056` so KOReader can still reach tailnet services.
 
-> **PocketBook note**: PocketBook firmware doesn't configure the loopback interface at boot. The start script handles this automatically.
+> **Loopback note**: Some e-reader firmwares (PocketBook, Kobo) don't configure the loopback interface at boot. The start script detects this and brings up `lo` automatically.
 
 ### FAT32 and Read-Only Filesystems
 

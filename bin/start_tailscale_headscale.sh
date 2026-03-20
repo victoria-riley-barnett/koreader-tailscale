@@ -41,9 +41,15 @@ export HOME="$TS_DIR"
 export XDG_CACHE_HOME="$STATE_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Ensure loopback has 127.0.0.1 (needed on PocketBook)
-if [ -x /ebrmain/cramfs/bin/sudo ]; then
-    /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+# Ensure loopback has 127.0.0.1 — required for SOCKS5/HTTP proxy to bind.
+# Many e-reader firmwares (PocketBook, Kobo) don't configure lo at boot.
+if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
+    ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+    if [ -x /ebrmain/cramfs/bin/sudo ]; then
+        /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
+    fi
+    ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
+    ip link set lo up 2>/dev/null || true
 fi
 
 # Try to set up TUN device if missing
@@ -59,7 +65,7 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # Start daemon
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
+./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
