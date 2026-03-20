@@ -59,7 +59,7 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # Start daemon
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
@@ -78,7 +78,8 @@ fi
 
 # Build command with login-server
 # --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook)
-CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
+# --netfilter-mode=off: avoid nftables/iptables reconfig stalls on constrained e-reader kernels.
+CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
 
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
@@ -91,7 +92,7 @@ if [ $RC -ne 0 ]; then
         if [ -n "$SUG_HOST" ]; then
             HOST_FLAG="--hostname=$SUG_HOST"
         fi
-        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false"
+        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
         [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
         sh -c "$CMD" < /dev/null > tailscale.log 2>&1
         RC=$?
