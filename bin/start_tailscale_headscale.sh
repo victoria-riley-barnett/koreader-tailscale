@@ -59,7 +59,7 @@ if [ ! -c /dev/net/tun ]; then
 fi
 
 # Start daemon
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)

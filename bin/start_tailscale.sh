@@ -60,7 +60,7 @@ fi
 # Start daemon with the appropriate state directory
 # --socks5-server / --outbound-http-proxy-listen: proxies so KOReader can reach
 #   Tailscale IPs without a TUN interface (userspace-networking mode).
-nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=127.0.0.1:1055 > tailscaled.log 2>&1 &
+nohup ./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 
 # Wait for daemon socket to become available
 sleep 3
