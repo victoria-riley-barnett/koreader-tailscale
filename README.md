@@ -1,22 +1,39 @@
 # Tailscale Plugin for KOReader
-Secure cross-network remote access and file synchronization for your Kindle using Tailscale VPN.
+Secure cross-network remote access and file synchronization for your e-reader using Tailscale VPN.
+
+## Supported Devices
+| Device | Storage Path | Architecture |
+|--------|-------------|-------------|
+| Kindle (PW5, PW6, etc.) | `/mnt/us/tailscale/` | ARM 32-bit |
+| PocketBook (Verse Pro, etc.) | `/mnt/ext1/tailscale/` | ARM 32-bit |
+
+> **Note:** The PocketBook Verse Pro has a 64-bit CPU (Cortex-A53) but runs a **32-bit userspace**. The plugin detects the actual architecture at runtime via `uname -m` and downloads the matching binary.
+
+The plugin **auto-detects** your device and uses the correct paths and binary architecture automatically.
 
 ## Features
-- **Secure Remote Access**: Access your Kindle from anywhere via Tailscale VPN.
+- **Secure Remote Access**: Access your e-reader from anywhere via Tailscale VPN.
 - **Cross-network File Synchronization**: Use KOreader [Syncthing](https://github.com/jasonchoimtt/koreader-syncthing) for file transfers **without being on the same network**.
+- **HTTP Proxy for Userspace Mode**: On devices without a TUN kernel module (e.g. PocketBook), the plugin exposes an HTTP CONNECT proxy so KOReader can reach internal services (OPDS, etc.) through Tailscale.
 
 ## Prerequisites
 1. **Tailscale Account**: Sign up at [tailscale.com](https://tailscale.com).
 2. **Auth Key**: Create a reusable auth key at [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
-3. **Ereader with file and/or ssh access**: With KOReader installed. Tested on Kindle PW6 and PW5, but it might work as far as the armv7 binaries do.
+3. **E-reader with file and/or ssh access**: With KOReader installed. Tested on Kindle PW6, PW5, and PocketBook Verse Pro.
 
 ## Installation
 
+### Kindle
 1. Copy `tailscale.koplugin` to `/mnt/us/koreader/plugins/`.
+
+### PocketBook
+1. Copy `tailscale.koplugin` to the KOReader plugins directory (usually `/mnt/ext1/applications/koreader/plugins/` or wherever KOReader stores its plugins on your device).
+
+### All Devices
 2. Restart KOReader.
 3. In KOReader: Menu → Plugins → Tailscale VPN → Install/Update Tailscale.
 
-**Note**: Installation downloads ~57 MB and may take 5–10 minutes on slow Wi-Fi. Pre-download binaries and transfer via SCP/SSH to `/mnt/us/tailscale/bin/` to speed up.
+**Note**: Installation downloads ~25–57 MB (depending on architecture) and may take 5–10 minutes on slow Wi-Fi. You can pre-download binaries and transfer via SCP/SSH to speed up.
 
 ## Setup
 1. **Get Auth Key**:
@@ -25,14 +42,17 @@ Secure cross-network remote access and file synchronization for your Kindle usin
    - Save the key as auth.key
 
 2. **Configure Auth Key**:
-   - Copy the auth.key file to `/mnt/us/tailscale/bin/auth.key`:
+   - Copy the auth.key file to your device's tailscale bin directory:
      ```sh
-     scp -P 2222 auth.key user@kindle-ip:/mnt/us/tailscale/bin/auth.key
+     # Kindle
+     scp -P 2222 auth.key user@device-ip:/mnt/us/tailscale/bin/auth.key
+     # PocketBook
+     scp -P 2222 auth.key user@device-ip:/mnt/ext1/tailscale/bin/auth.key
      ```
 
 3. **(Optional) Use a self-hosted Headscale server**:
-   - If you run Headscale and want your Kindle to use it instead of tailscale.com, create a file `/mnt/us/tailscale/bin/headscale.url` containing the full Headscale URL (for example: `https://headscale.example.com`).
-   - The plugin exposes a menu item *Set Headscale URL* which shows the currently configured URL and instructions for updating it.
+   - If you run Headscale and want your device to use it instead of tailscale.com, create a `headscale.url` file containing the full Headscale URL (for example: `https://headscale.example.com`).
+   - Place it in the tailscale bin directory (e.g. `/mnt/us/tailscale/bin/headscale.url` on Kindle, `/mnt/ext1/tailscale/bin/headscale.url` on PocketBook).
 
 4. **Start Tailscale**:
    - In KOReader: Menu → Network → Tailscale VPN → Toggle "On".
@@ -41,7 +61,7 @@ Secure cross-network remote access and file synchronization for your Kindle usin
 ### Scripts
 
 - `bin/start_tailscale.sh`: Standard start script. Includes the current device hostname (if present) and uses an `auth.key` when available. Use this for normal Tailscale operation.
-- `bin/start_tailscale_headscale.sh`: Explicit Headscale start script. Reads a Headscale URL from `/mnt/us/tailscale/bin/headscale.url` and passes it to `tailscale up` via `--login-server`. Run this when you manage devices via a self-hosted Headscale server.
+- `bin/start_tailscale_headscale.sh`: Explicit Headscale start script. Reads a Headscale URL from the device's `headscale.url` file and passes it to `tailscale up` via `--login-server`. Run this when you manage devices via a self-hosted Headscale server.
 
 To make the scripts executable on the device:
 ```sh
@@ -52,7 +72,7 @@ chmod +x start_tailscale.sh start_tailscale_headscale.sh
 If you prefer automated behavior, use `start_tailscale.sh`. If you manage devices with Headscale, run `start_tailscale_headscale.sh` explicitly so the script only applies the `--login-server` flag when you opt in.
 
 ## Usage with Syncthing
-1. Note your Kindle's Tailscale IP from the status menu.
+1. Note your device's Tailscale IP from the status menu.
 2. Install Tailscale and Syncthing on other devices.
 3. Configure Syncthing to use the Tailscale IP by adding the address:
    ```
@@ -65,11 +85,34 @@ If you prefer automated behavior, use `start_tailscale.sh`. If you manage device
 - **Status**: Show device IP and info.
 - **Install/Update Tailscale**: Download and install binaries.
 - **Uninstall Tailscale**: Stop and remove Tailscale files (removes auth key).
+- **Proxy for userspace mode** *(Settings/Config submenu)*: Enable/disable the HTTP CONNECT proxy at `127.0.0.1:1055`. See [HTTP Proxy](#http-proxy-for-userspace-mode) below.
+
+---
+
+## HTTP Proxy for Userspace Mode
+
+### Why it exists
+
+The PocketBook Verse Pro does not have the Linux TUN kernel module, so Tailscale cannot create a virtual network interface. Instead it runs in **userspace networking mode**: WireGuard runs entirely in the `tailscaled` process and no routes are added to the kernel's routing table.
+
+This means the device's apps (KOReader included) cannot reach Tailscale peers or subnet-routed IPs through normal TCP connections — there is no `/dev/net/tun` interface to route through.
+
+To work around this, the plugin starts `tailscaled` with `-outbound-http-proxy-listen=127.0.0.1:1055`, which exposes an **HTTP CONNECT proxy** on the loopback interface. Any HTTP client that is configured to use this proxy will have its connections tunnelled through the Tailscale userspace WireGuard stack.
+
+> **PocketBook loopback note**: The PocketBook firmware does not configure the loopback interface at boot. The start script uses a device-specific `sudo ifconfig lo 127.0.0.1 up` (allowed by PocketBook's NOPASSWD sudoers) to bring it up before binding the proxy.
+
+### Enabling the proxy in KOReader
+
+In KOReader: **Menu → Network → Tailscale VPN → Settings/Config → Proxy for userspace mode**
+
 
 ## Files Location
-- Binaries: `/mnt/us/tailscale/bin/`
-- Logs: `/mnt/us/tailscale/bin/tailscale.log`
-- Configuration: `/mnt/us/tailscale/bin/auth.key`
+
+| File | Kindle | PocketBook |
+|------|--------|------------|
+| Binaries | `/mnt/us/tailscale/bin/` | `/mnt/ext1/tailscale/bin/` |
+| Logs | `/mnt/us/tailscale/bin/tailscale.log` | `/mnt/ext1/tailscale/bin/tailscale.log` |
+| Auth Key | `/mnt/us/tailscale/bin/auth.key` | `/mnt/ext1/tailscale/bin/auth.key` |
 
 ## Uninstall / Reinstall
 1. **Uninstall**: Menu → Plugins → Tailscale VPN → Uninstall Tailscale.
@@ -78,14 +121,14 @@ If you prefer automated behavior, use `start_tailscale.sh`. If you manage device
 You may want to backup `/mnt/us/tailscale/bin/auth.key` by moving it to `/mnt/us/tailscale/bin/auth.key.backup` or similar before uninstalling, and restore its name after reinstalling.
 
 ## Troubleshooting
-- **Logs**:
-  - Daemon logs: `/mnt/us/tailscale/bin/tailscaled.log`
-  - Client logs: `/mnt/us/tailscale/bin/tailscale.log`
+- **Logs** (paths depend on device):
+  - Kindle: `/mnt/us/tailscale/bin/tailscaled.log` and `tailscale.log`
+  - PocketBook: `/mnt/ext1/tailscale/bin/tailscaled.log` and `tailscale.log`
 
 ## Security Notes
 - Tailscale uses end-to-end encryption.
-- Your Kindle is only accessible to devices in your Tailscale network.
-- Auth keys are stored locally on the Kindle.
+- Your e-reader is only accessible to devices in your Tailscale network.
+- Auth keys are stored locally on the device.
 - No inbound internet ports are opened.
 
 ## Credits

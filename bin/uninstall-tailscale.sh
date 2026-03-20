@@ -2,7 +2,7 @@
 # Uninstall Tailscale for KOReader
 set -e
 
-TS_DIR="/mnt/us/tailscale"
+TS_DIR="${1:-/mnt/us/tailscale}"
 BIN_DIR="$TS_DIR/bin"
 
 # Stop Tailscale if running

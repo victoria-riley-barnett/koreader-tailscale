@@ -1,20 +1,64 @@
 local DataStorage = require("datastorage")
+local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local NetworkMgr = require("ui/network/manager")
+local ffi = require("ffi")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
+
+-- Port that tailscaled's HTTP CONNECT proxy listens on (bound to 127.0.0.1).
+-- The start script also ensures loopback is configured before starting tailscaled.
+local TS_PROXY = "127.0.0.1:1055"
+local TS_PROXY_URL = "http://" .. TS_PROXY
+
+-- FFI binding for setenv/unsetenv so we can affect the current process environment.
+ffi.cdef[[
+    int setenv(const char *name, const char *value, int overwrite);
+    int unsetenv(const char *name);
+]]
 
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
     is_doc_only = false,
 }
 
+--- Detect CPU architecture for Tailscale binary download.
+function TailscalePlugin:detectArch()
+    local handle = io.popen("uname -m 2>/dev/null")
+    if handle then
+        local machine = handle:read("*a") or ""
+        handle:close()
+        machine = machine:gsub("%s+$", "")
+        if machine == "aarch64" or machine == "arm64" then
+            return "arm64"
+        end
+    end
+    -- Default to 32-bit ARM (covers armv7l, armv6l, etc.)
+    return "arm"
+end
+
+--- Detect device platform and return base tailscale directory and arch.
+function TailscalePlugin:detectPlatform()
+    local arch = self:detectArch()
+    if Device:isPocketBook() then
+        return "/mnt/ext1/tailscale", arch
+    end
+    -- Default: Kindle
+    return "/mnt/us/tailscale", arch
+end
+
 function TailscalePlugin:init()
     logger.info("Tailscale plugin initializing")
     self.plugin_dir = DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
-    
+
+    -- Detect platform-specific paths
+    self.ts_dir, self.ts_arch = self:detectPlatform()
+    self.ts_bin = self.ts_dir .. "/bin"
+    logger.info("Tailscale plugin: device dir=" .. self.ts_dir .. " arch=" .. self.ts_arch)
+
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
@@ -39,6 +83,50 @@ function TailscalePlugin:onToggleTailscale(callback)
     end
     if callback then
         callback()
+    end
+end
+
+function TailscalePlugin:isTailscaleProxyEnabled()
+    local proxy = G_reader_settings:readSetting("http_proxy")
+    local enabled = G_reader_settings:isTrue("http_proxy_enabled")
+    return enabled and proxy == TS_PROXY_URL
+end
+
+function TailscalePlugin:enableTailscaleProxy()
+    G_reader_settings:saveSetting("http_proxy", TS_PROXY_URL)
+    G_reader_settings:saveSetting("http_proxy_enabled", true)
+    if NetworkMgr.setProxyAddress then
+        NetworkMgr:setProxyAddress(TS_PROXY_URL)
+    end
+    if NetworkMgr.setProxyEnabled then
+        NetworkMgr:setProxyEnabled(true)
+    end
+    -- Set process-level env vars for C-based HTTP clients (libcurl, wget, curl subprocesses).
+    ffi.C.setenv("http_proxy",  TS_PROXY_URL, 1)
+    ffi.C.setenv("HTTP_PROXY",  TS_PROXY_URL, 1)
+    ffi.C.setenv("https_proxy", TS_PROXY_URL, 1)
+    ffi.C.setenv("HTTPS_PROXY", TS_PROXY_URL, 1)
+    -- Set LuaSocket's module-level proxy for pure-Lua HTTP clients (OPDS browser).
+    local ok, socket_http = pcall(require, "socket.http")
+    if ok and socket_http then
+        socket_http.PROXY = TS_PROXY_URL
+    end
+end
+
+function TailscalePlugin:disableTailscaleProxy()
+    if G_reader_settings:readSetting("http_proxy") == TS_PROXY_URL then
+        G_reader_settings:saveSetting("http_proxy_enabled", false)
+        if NetworkMgr.setProxyEnabled then
+            NetworkMgr:setProxyEnabled(false)
+        end
+    end
+    ffi.C.unsetenv("http_proxy")
+    ffi.C.unsetenv("HTTP_PROXY")
+    ffi.C.unsetenv("https_proxy")
+    ffi.C.unsetenv("HTTPS_PROXY")
+    local ok, socket_http = pcall(require, "socket.http")
+    if ok and socket_http then
+        socket_http.PROXY = nil
     end
 end
 
@@ -87,6 +175,34 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 text = _("Settings / Config"),
                 sub_item_table = {
                     {
+                        text = _("Proxy for userspace mode"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self:isTailscaleProxyEnabled()
+                        end,
+                        callback = function(touchmenu_instance)
+                            if self:isTailscaleProxyEnabled() then
+                                self:disableTailscaleProxy()
+                                UIManager:show(InfoMessage:new{
+                                    text = _("HTTP proxy disabled."),
+                                    timeout = 3
+                                })
+                            else
+                                self:enableTailscaleProxy()
+                                UIManager:show(InfoMessage:new{
+                                    text = _("HTTP proxy enabled: " .. TS_PROXY ..
+                                        "\nKOReader routes HTTP/OPDS through" ..
+                                        "\nTailscale userspace networking." ..
+                                        "\nUse Tailscale IP (100.x.x.x) in OPDS URL."),
+                                    timeout = 6
+                                })
+                            end
+                            if touchmenu_instance then
+                                touchmenu_instance:updateItems()
+                            end
+                        end,
+                    },
+                    {
                         text = _("Configure Auth Key"),
                         callback = function()
                             self:configureAuthKey()
@@ -103,7 +219,7 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         callback = function()
                             -- Ensure a Headscale URL is configured before attempting to start
                             local cfg_path = self.plugin_dir .. "/headscale.url"
-                            local system_path = "/mnt/us/tailscale/bin/headscale.url"
+                            local system_path = self.ts_bin .. "/headscale.url"
                             local val = nil
                             local f = io.open(cfg_path, "r")
                             if not f then f = io.open(system_path, "r") end
@@ -125,7 +241,7 @@ function TailscalePlugin:addToMainMenu(menu_items)
                             local s = io.open(script, "r")
                             if s then
                                 s:close()
-                                os.execute(script)
+                                os.execute(script .. " " .. self.ts_dir)
                                 UIManager:show(InfoMessage:new{
                                     text = _("Started Tailscale (Headscale)"),
                                     timeout = 3
@@ -152,7 +268,7 @@ end
 
 function TailscalePlugin:installTailscale()
     -- First check if binaries already exist
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -208,7 +324,7 @@ function TailscalePlugin:runInstallation()
     local success = false
     
     -- Use a more robust execution method with timeout
-    local cmd = self.plugin_dir .. "/bin/install-tailscale.sh"
+    local cmd = self.plugin_dir .. "/bin/install-tailscale.sh " .. self.ts_dir .. " " .. self.ts_arch
     local handle = io.popen(cmd .. " 2>&1")
     if handle then
         result = handle:read("*a")
@@ -230,7 +346,7 @@ function TailscalePlugin:runInstallation()
     end
     
     -- Check if binaries were actually installed
-    local bin_check = io.popen("ls -la /mnt/us/tailscale/bin/tailscale /mnt/us/tailscale/bin/tailscaled 2>/dev/null")
+    local bin_check = io.popen("ls -la " .. self.ts_bin .. "/tailscale " .. self.ts_bin .. "/tailscaled 2>/dev/null")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -270,7 +386,7 @@ end
 
 function TailscalePlugin:startDaemon()
     -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh " .. self.ts_dir)
     UIManager:show(InfoMessage:new{
         text = _("Tailscale daemon started"),
         timeout = 2
@@ -297,7 +413,7 @@ end
 
 function TailscalePlugin:connectTailscale()
     -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -312,9 +428,9 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/start_tailscale.sh " .. self.ts_dir)
     UIManager:show(InfoMessage:new{
-        text = _("Tailscale connection started\nCheck /mnt/us/tailscale/bin/tailscale.log for status"),
+        text = _("Tailscale connection started\nCheck " .. self.ts_bin .. "/tailscale.log for status"),
         timeout = 4
     })
 
@@ -322,7 +438,8 @@ function TailscalePlugin:connectTailscale()
 end
 
 function TailscalePlugin:disconnectTailscale()
-    os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh")
+    os.execute(self.plugin_dir .. "/bin/stop_tailscale.sh " .. self.ts_dir)
+    self:disableTailscaleProxy()
     UIManager:show(InfoMessage:new{
         text = _("Tailscale disconnected"),
         timeout = 2
@@ -331,7 +448,7 @@ end
 
 function TailscalePlugin:showStatus()
     -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f /mnt/us/tailscale/bin/tailscale && test -f /mnt/us/tailscale/bin/tailscaled && echo 'exists'")
+    local bin_check = io.popen("test -f " .. self.ts_bin .. "/tailscale && test -f " .. self.ts_bin .. "/tailscaled && echo 'exists'")
     local bin_result = ""
     if bin_check then
         bin_result = bin_check:read("*a")
@@ -354,7 +471,7 @@ function TailscalePlugin:showStatus()
 
     -- Prefer JSON status to avoid noisy peers/health lines
     local jraw = nil
-    local h = io.popen("/mnt/us/tailscale/bin/tailscale status --json 2>/dev/null")
+    local h = io.popen(self.ts_bin .. "/tailscale status --json 2>/dev/null")
     if h then
         jraw = h:read("*a")
         h:close()
@@ -376,21 +493,60 @@ function TailscalePlugin:showStatus()
         end
     end
 
+    -- Show TUN vs userspace networking mode (critical for OPDS/outbound access)
+    local tun_h = io.popen("ip link show tailscale0 2>/dev/null | head -1")
+    if tun_h then
+        local tun_out = tun_h:read("*a") or ""
+        tun_h:close()
+        if tun_out ~= "" then
+            table.insert(lines, "Net mode: TUN (full routing)")
+        else
+            table.insert(lines, "Net mode: Userspace (inbound only!)")
+        end
+    end
+
     if parsed and type(parsed) == "table" then
-        local backend = parsed.BackendState or "Unknown"
+        local backend = type(parsed.BackendState) == "string" and parsed.BackendState or "Unknown"
         table.insert(lines, "State: " .. backend)
         if parsed.Self and type(parsed.Self) == "table" then
-            local ips = parsed.Self.TailscaleIPs or {}
+            local raw_ips = parsed.Self.TailscaleIPs
+            local ips = type(raw_ips) == "table" and raw_ips or {}
             if #ips > 0 then
                 table.insert(lines, "IPs: " .. join(ips, ", "))
             end
-            if parsed.Self.HostName then
-                table.insert(lines, "Device: " .. tostring(parsed.Self.HostName))
+            local hostname = parsed.Self.HostName
+            if type(hostname) == "string" and hostname ~= "" then
+                table.insert(lines, "Device: " .. hostname)
+            end
+        end
+        -- Show online peers (useful for verifying OPDS server is visible)
+        local peer_map = parsed.Peer
+        if type(peer_map) == "table" then
+            local online_peers = {}
+            for _, peer in pairs(peer_map) do
+                if type(peer) == "table" and peer.Online == true then
+                    local hn = type(peer.HostName) == "string" and peer.HostName or "?"
+                    local peer_ips = type(peer.TailscaleIPs) == "table" and peer.TailscaleIPs or {}
+                    local ip_str = #peer_ips > 0 and tostring(peer_ips[1]) or ""
+                    table.insert(online_peers, hn .. (ip_str ~= "" and " " .. ip_str or ""))
+                end
+            end
+            if #online_peers > 0 then
+                local max_show = math.min(3, #online_peers)
+                table.insert(lines, "Online peers (" .. #online_peers .. "):")
+                for i = 1, max_show do
+                    table.insert(lines, "  " .. online_peers[i])
+                end
+                if #online_peers > max_show then
+                    table.insert(lines, "  +" .. (#online_peers - max_show) .. " more")
+                end
+            else
+                table.insert(lines, "Online peers: none")
             end
         end
     else
         -- Fallback: use terse commands without peers
-        local ip_h = io.popen("/mnt/us/tailscale/bin/tailscale ip 2>/dev/null")
+        local ip_h = io.popen(self.ts_bin .. "/tailscale ip 2>/dev/null")
         if ip_h then
             local ips = ip_h:read("*a") or ""
             ip_h:close()
@@ -401,11 +557,10 @@ function TailscalePlugin:showStatus()
             end
         end
         -- Try to get a simple state without peers/health
-        local s_h = io.popen("/mnt/us/tailscale/bin/tailscale status --peers=false 2>/dev/null")
+        local s_h = io.popen(self.ts_bin .. "/tailscale status --peers=false 2>/dev/null")
         if s_h then
             local s = s_h:read("*a") or ""
             s_h:close()
-            -- Remove known noisy lines if any slipped through
             local filtered = {}
             for line in s:gmatch("[^\r\n]+") do
                 if not line:match("health") and not line:match("logtail") and not line:match("control:") then
@@ -420,13 +575,13 @@ function TailscalePlugin:showStatus()
 
     UIManager:show(InfoMessage:new{
         text = _("Tailscale Status:\n") .. table.concat(lines, "\n"),
-        timeout = 8
+        timeout = 12
     })
 end
 
 function TailscalePlugin:configureAuthKey()
     -- Check current auth key status
-    local auth_check = io.popen("grep '^tskey-' /mnt/us/tailscale/bin/auth.key 2>/dev/null")
+    local auth_check = io.popen("grep '^tskey-' " .. self.ts_bin .. "/auth.key 2>/dev/null")
     local auth_result = ""
     if auth_check then
         auth_result = auth_check:read("*a")
@@ -440,7 +595,7 @@ function TailscalePlugin:configureAuthKey()
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _("No valid auth key found.\nPlease edit:\n/mnt/us/tailscale/bin/auth.key\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
+            text = _("No valid auth key found.\nPlease edit:\n" .. self.ts_bin .. "/auth.key\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
             timeout = 8
         })
     end
@@ -448,7 +603,7 @@ end
 
 function TailscalePlugin:configureHeadscale()
     local cfg_path = self.plugin_dir .. "/headscale.url"
-    local system_path = "/mnt/us/tailscale/bin/headscale.url"
+    local system_path = self.ts_bin .. "/headscale.url"
 
     -- Try to read existing value
     local f = io.open(cfg_path, "r")
@@ -472,7 +627,7 @@ function TailscalePlugin:configureHeadscale()
     end
 
     UIManager:show(InfoMessage:new{
-        text = _("No Headscale URL configured.\nTo set one, create the file:\n/mnt/us/tailscale/bin/headscale.url\ncontaining the full URL (eg. https://headscale.example.com)\nYou can SCP the file into place from your workstation."),
+        text = _("No Headscale URL configured.\nTo set one, create the file:\n" .. self.ts_bin .. "/headscale.url\ncontaining the full URL (eg. https://headscale.example.com)\nYou can SCP the file into place from your workstation."),
         timeout = 8
     })
 end
@@ -483,7 +638,8 @@ function TailscalePlugin:uninstallTailscale()
         timeout = 3
     })
     
-    os.execute(self.plugin_dir .. "/bin/uninstall-tailscale.sh")
+    local uninstall_cmd = self.plugin_dir .. "/bin/uninstall-tailscale.sh " .. self.ts_dir
+    os.execute(uninstall_cmd)
     
     UIManager:show(InfoMessage:new{
         text = _("Uninstall complete!\nRestart KOReader to finish cleanup."),
