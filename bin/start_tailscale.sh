@@ -9,6 +9,10 @@ cd "$BIN_DIR" || exit 1
 [ -f ./tailscaled ] || exit 1
 [ -f ./tailscale ] || exit 1
 
+if [ -f "$BIN_DIR/ca-certificates.crt" ]; then
+    export SSL_CERT_FILE="$BIN_DIR/ca-certificates.crt"
+fi
+
 # Stop any running instances
 ./tailscale down >/dev/null 2>&1 || true
 killall tailscaled 2>/dev/null || true
