@@ -66,4 +66,9 @@ mv -f tailscale_*/tailscale tailscale_*/tailscaled ./ 2>/dev/null || true
 rm -rf tailscale_* 2>/dev/null || true
 chmod +x ./tailscale ./tailscaled 2>/dev/null || true
 [ -f auth.key ] || : > auth.key
+
+if [ ! -f "$BIN_DIR/ca-certificates.crt" ]; then
+    busybox wget -q -O "$BIN_DIR/ca-certificates.crt" "http://curl.se/ca/cacert.pem" 2>/dev/null || true
+fi
+
 exit 0

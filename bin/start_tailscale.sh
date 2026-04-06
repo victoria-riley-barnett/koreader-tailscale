@@ -63,6 +63,10 @@ TUN_FLAG="--tun=userspace-networking"
 # Wait for daemon socket to become available
 sleep 3
 
+if [ -f "$BIN_DIR/ca-certificates.crt" ]; then
+    export SSL_CERT_FILE="$BIN_DIR/ca-certificates.crt"
+fi
+
 # Get current hostname (if any)
 HOSTNAME=""
 if ./tailscale status --json >/dev/null 2>&1; then
