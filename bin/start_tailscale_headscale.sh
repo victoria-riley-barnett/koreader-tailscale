@@ -70,8 +70,8 @@ HOST_FLAG=""
 
 # Read auth key if present
 AUTH_KEY=""
-if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
-    AUTH_KEY=$(grep "^tskey-" auth.key | head -1 | tr -d ' ' | tr -d '#')
+if [ -f auth.key ] && grep -E -q "^(tskey-|hskey-auth-)" auth.key; then
+    AUTH_KEY=$(grep -E "^(tskey-|hskey-auth-)" auth.key | head -1 | tr -d ' ' | tr -d '#')
 fi
 
 # Build command with login-server
