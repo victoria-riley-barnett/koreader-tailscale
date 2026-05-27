@@ -64,6 +64,19 @@ function TailscalePlugin:getHeadscaleUrlPath()
     return self:getBinDir() .. "/headscale.url"
 end
 
+function TailscalePlugin:getStartScript()
+    local f = io.open(self:getHeadscaleUrlPath(), "r")
+    if f then
+        local val = f:read("*a") or ""
+        f:close()
+        val = val:gsub("%s+$", "")
+        if val ~= "" then
+            return "/bin/start_tailscale_headscale.sh", "Headscale"
+        end
+    end
+    return "/bin/start_tailscale.sh", "Tailscale"
+end
+
 function TailscalePlugin:getLogPath()
     return self:getBinDir() .. "/tailscale.log"
 end
@@ -148,46 +161,6 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         text = _("Headscale URL info"),
                         callback = function()
                             self:configureHeadscale()
-                        end
-                    },
-                    {
-                        text = _("Start with Headscale"),
-                        callback = function()
-                            -- Ensure a Headscale URL is configured before attempting to start
-                            local cfg_path = self.plugin_dir .. "/headscale.url"
-                            local system_path = self:getHeadscaleUrlPath()
-                            local val = nil
-                            local f = io.open(cfg_path, "r")
-                            if not f then f = io.open(system_path, "r") end
-                            if f then
-                                val = f:read("*a") or ""
-                                f:close()
-                                val = val:gsub("%s+$", "")
-                            end
-
-                            if not val or val == "" then
-                                UIManager:show(InfoMessage:new{
-                                    text = _("No Headscale URL configured. Open 'Headscale URL info' to add one before starting."),
-                                    timeout = 6
-                                })
-                                return
-                            end
-
-                            local script = self.plugin_dir .. "/bin/start_tailscale_headscale.sh"
-                            local s = io.open(script, "r")
-                            if s then
-                                s:close()
-                                os.execute("TS_DIR=" .. self.ts_dir .. " " .. script)
-                                UIManager:show(InfoMessage:new{
-                                    text = _("Started Tailscale (Headscale)"),
-                                    timeout = 3
-                                })
-                            else
-                                UIManager:show(InfoMessage:new{
-                                    text = _("Headscale start script not found. Place start_tailscale_headscale.sh in plugin bin/"),
-                                    timeout = 6
-                                })
-                            end
                         end
                     },
                     {
@@ -323,9 +296,10 @@ end
 
 function TailscalePlugin:startDaemon()
     -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+    local script_name, mode_label = self:getStartScript()
+    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. script_name)
     UIManager:show(InfoMessage:new{
-        text = _("Tailscale daemon started"),
+        text = _("Tailscale (" .. mode_label .. ") daemon started"),
         timeout = 2
     })
 end
@@ -366,9 +340,10 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+    local script_name, mode_label = self:getStartScript()
+    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. script_name)
     UIManager:show(InfoMessage:new{
-        text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
+        text = _("Tailscale (" .. mode_label .. ") connection started\nCheck " .. self:getLogPath() .. " for status"),
         timeout = 4
     })
 
@@ -480,7 +455,7 @@ end
 
 function TailscalePlugin:configureAuthKey()
     -- Check current auth key status
-    local auth_check = io.popen("grep '^tskey-' '" .. self:getAuthKeyPath() .. "' 2>/dev/null")
+    local auth_check = io.popen("grep -E '^(tskey-|hskey-auth-)' '" .. self:getAuthKeyPath() .. "' 2>/dev/null")
     local auth_result = ""
     if auth_check then
         auth_result = auth_check:read("*a")
@@ -494,7 +469,7 @@ function TailscalePlugin:configureAuthKey()
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _("No valid auth key found.\nPlease edit:\n" .. self:getAuthKeyPath() .. "\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
+            text = _("No valid auth key found.\nPlease edit:\n" .. self:getAuthKeyPath() .. "\nwith your Tailscale or Headscale auth key\nTailscale keys start with tskey-\nHeadscale keys start with hskey-auth-"),
             timeout = 8
         })
     end
