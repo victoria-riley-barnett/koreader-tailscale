@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-TS_FALLBACK_VER="1.96.2"
+TS_FALLBACK_VER="1.98.3"
 TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
 TS_ARCH="${2:-}"
 BIN_DIR="$TS_DIR/bin"
