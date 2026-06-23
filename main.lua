@@ -6,6 +6,7 @@ local InfoMessage = require("ui/widget/infomessage")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
+local Dispatcher = require("dispatcher")
 
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
@@ -50,6 +51,10 @@ function TailscalePlugin:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+
+-- Register a Dispatcher action so the toggle appears under "System action..."
+Dispatcher:registerAction("toggle_tailscale_vpn",
+  { category = "none", event = "ToggleTailscale", title = _("Toggle Tailscale VPN"), general = true })
 end
 
 function TailscalePlugin:getBinDir()
