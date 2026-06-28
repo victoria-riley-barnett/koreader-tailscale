@@ -367,7 +367,6 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 end,
             },
             { text = _("Status"), callback = function() self:showStatus() end },
-            { text = _("Start/Stop Daemon"), callback = function() self:toggleDaemon() end },
             { text = _("Install/Update Tailscale"), callback = function() self:installTailscale() end },
             {
                 text = _("Settings / Config"),
@@ -444,28 +443,6 @@ function TailscalePlugin:runInstallation()
     end
 end
 
--- ─── daemon control ───────────────────────────────────────────────
-
-function TailscalePlugin:startDaemon()
-    if not self:binariesExist() then
-        UIManager:show(InfoMessage:new{
-            text = _("Tailscale not installed."),
-            timeout = 3,
-        })
-        return
-    end
-    self:execStartScript()
-    UIManager:show(InfoMessage:new{ text = _("Tailscale daemon started"), timeout = 2 })
-end
-
-function TailscalePlugin:stopDaemon()
-    self:execStopScript()
-    UIManager:show(InfoMessage:new{ text = _("Tailscale daemon stopped"), timeout = 2 })
-end
-
-function TailscalePlugin:toggleDaemon()
-    if self:isRunning() then self:stopDaemon() else self:startDaemon() end
-end
 
 -- ─── connect / disconnect ─────────────────────────────────────────
 
