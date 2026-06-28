@@ -50,6 +50,63 @@ function TailscalePlugin:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+
+    self:installUSBMSHook()
+    self:resumeAfterUSBMS()
+end
+
+--- Stop Tailscale before KOReader enters USB storage mode, then auto-restart afterwards.
+-- KOReader signals USB storage mode by calling UIManager:quit(86) (KO_RC_USBMS); that exit
+-- code is used nowhere else, so it is a reliable, USB-specific trigger. tailscaled runs from
+-- the partition KOReader wants to export, so it keeps the filesystem busy and must be killed.
+-- We wrap UIManager.quit once (it is a singleton, and the plugin is re-instantiated for both
+-- ReaderUI and FileManager). The closure captures device-stable paths, not a plugin instance.
+function TailscalePlugin:installUSBMSHook()
+    if UIManager._tailscale_usbms_hook then
+        return
+    end
+    UIManager._tailscale_usbms_hook = true
+
+    local ts_dir = self.ts_dir
+    local plugin_dir = self.plugin_dir
+    local marker = self:getRestartMarkerPath()
+    local orig_quit = UIManager.quit
+    UIManager.quit = function(uimgr, exit_code, ...)
+        if exit_code == 86 then -- KO_RC_USBMS
+            -- Standalone pgrep so this does not depend on a plugin instance.
+            local handle = io.popen("pgrep tailscaled 2>/dev/null")
+            local running = handle and handle:read("*a") or ""
+            if handle then handle:close() end
+            if running ~= "" then
+                logger.info("Tailscale plugin: stopping tailscaled before USB storage mode")
+                local f = io.open(marker, "w")
+                if f then
+                    f:write("1")
+                    f:close()
+                end
+                -- Synchronous: the filesystem must be free before the USBMS tool unmounts it.
+                os.execute("TS_DIR=" .. ts_dir .. " " .. plugin_dir .. "/bin/stop_tailscale.sh")
+            end
+        end
+        return orig_quit(uimgr, exit_code, ...)
+    end
+end
+
+--- After returning from a USB storage session, KOReader restarts cold (no resume event),
+-- so we detect the marker left by the quit(86) hook and bring Tailscale back up.
+function TailscalePlugin:resumeAfterUSBMS()
+    local marker = self:getRestartMarkerPath()
+    local mf = io.open(marker, "r")
+    if not mf then
+        return
+    end
+    mf:close()
+    os.remove(marker)
+    logger.info("Tailscale plugin: restarting Tailscale after USB storage session")
+    -- Deferred so we don't block UI startup (start_tailscale.sh sleeps ~2s).
+    UIManager:scheduleIn(2, function()
+        self:connectTailscale()
+    end)
 end
 
 function TailscalePlugin:getBinDir()
@@ -58,6 +115,10 @@ end
 
 function TailscalePlugin:getAuthKeyPath()
     return self:getBinDir() .. "/auth.key"
+end
+
+function TailscalePlugin:getRestartMarkerPath()
+    return self:getBinDir() .. "/restart_after_usbms"
 end
 
 function TailscalePlugin:getHeadscaleUrlPath()

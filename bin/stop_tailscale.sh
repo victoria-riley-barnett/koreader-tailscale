@@ -17,4 +17,14 @@ cd "$BIN_DIR" 2>/dev/null || exit 0
 ./tailscaled -cleanup >/dev/null 2>&1 || true
 killall tailscaled 2>/dev/null || true
 
+# killall sends SIGTERM asynchronously; wait for tailscaled to actually exit so it no longer
+# holds the filesystem busy (e.g. before KOReader enters USB storage mode). SIGKILL fallback.
+i=0
+while pgrep tailscaled >/dev/null 2>&1; do
+    i=$((i+1))
+    [ "$i" -ge 10 ] && killall -9 tailscaled 2>/dev/null
+    [ "$i" -ge 20 ] && break
+    sleep 0.2
+done
+
 exit 0
