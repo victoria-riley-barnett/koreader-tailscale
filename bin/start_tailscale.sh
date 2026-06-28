@@ -9,6 +9,8 @@ cd "$BIN_DIR" || exit 1
 [ -f ./tailscaled ] || exit 1
 [ -f ./tailscale ] || exit 1
 
+export SSL_CERT_FILE=/mnt/onboard/.adds/koreader/data/ca-bundle.crt
+
 # Stop any running instances
 ./tailscale down >/dev/null 2>&1 || true
 killall tailscaled 2>/dev/null || true
