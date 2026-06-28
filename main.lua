@@ -124,12 +124,6 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 end
             },
             {
-                text = _("Start/Stop Daemon"),
-                callback = function()
-                    self:toggleDaemon()
-                end
-            },
-            {
                 text = _("Install/Update Tailscale"),
                 callback = function()
                     self:installTailscale()
@@ -321,44 +315,19 @@ function TailscalePlugin:runInstallation()
     end
 end
 
-function TailscalePlugin:startDaemon()
-    -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
-    UIManager:show(InfoMessage:new{
-        text = _("Tailscale daemon started"),
-        timeout = 2
-    })
-end
-
-
-function TailscalePlugin:stopDaemon()
-    -- Stop full Tailscale (daemon + CLI connect) quietly
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/stop_tailscale.sh")
-    UIManager:show(InfoMessage:new{
-        text = _("Tailscale daemon stopped"),
-        timeout = 2
-    })
-end
-
-function TailscalePlugin:toggleDaemon()
-    -- Convenience method to toggle full Tailscale (daemon + CLI connect) status --
-    if self:isRunning() then
-        self:stopDaemon()
-    else
-        self:startDaemon()
+--- Quick check that the tailscale/tailscaled binaries are present. Returns boolean.
+function TailscalePlugin:binariesInstalled()
+    local bin_check = io.popen("test -f '" .. self:getBinDir() .. "/tailscale' && test -f '" .. self:getBinDir() .. "/tailscaled' && echo 'exists'")
+    if not bin_check then
+        return false
     end
+    local bin_result = bin_check:read("*a")
+    bin_check:close()
+    return bin_result and bin_result ~= ""
 end
 
 function TailscalePlugin:connectTailscale()
-    -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f '" .. self:getBinDir() .. "/tailscale' && test -f '" .. self:getBinDir() .. "/tailscaled' && echo 'exists'")
-    local bin_result = ""
-    if bin_check then
-        bin_result = bin_check:read("*a")
-        bin_check:close()
-    end
-    
-    if not bin_result or bin_result == "" then
+    if not self:binariesInstalled() then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale not installed.\nPlease run Install Tailscale first."),
             timeout = 3
@@ -384,15 +353,7 @@ function TailscalePlugin:disconnectTailscale()
 end
 
 function TailscalePlugin:showStatus()
-    -- Quick binary existence check (faster than ls -la)
-    local bin_check = io.popen("test -f '" .. self:getBinDir() .. "/tailscale' && test -f '" .. self:getBinDir() .. "/tailscaled' && echo 'exists'")
-    local bin_result = ""
-    if bin_check then
-        bin_result = bin_check:read("*a")
-        bin_check:close()
-    end
-
-    if not bin_result or bin_result == "" then
+    if not self:binariesInstalled() then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale not installed.\nPlease run Install Tailscale first."),
             timeout = 3
