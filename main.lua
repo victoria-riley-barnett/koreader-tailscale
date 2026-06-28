@@ -3,6 +3,7 @@ local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local NetworkMgr = require("ui/network/manager")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
@@ -231,8 +232,10 @@ function TailscalePlugin:installTailscale()
             -- Force UI update to ensure message is visible
             UIManager:forceRePaint()
             
-            -- Run installation/update
-            self:runInstallation()
+            -- Run installation/update (needs network to download binaries)
+            NetworkMgr:runWhenOnline(function()
+                self:runInstallation()
+            end)
         end
         
         -- Use a timer to proceed after message is displayed
@@ -250,8 +253,10 @@ function TailscalePlugin:installTailscale()
         -- Force UI update to ensure message is visible
         UIManager:forceRePaint()
         
-        -- Run installation
-        self:runInstallation()
+        -- Run installation (needs network to download binaries)
+        NetworkMgr:runWhenOnline(function()
+            self:runInstallation()
+        end)
     end
 end
 
@@ -322,12 +327,15 @@ function TailscalePlugin:runInstallation()
 end
 
 function TailscalePlugin:startDaemon()
-    -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
-    UIManager:show(InfoMessage:new{
-        text = _("Tailscale daemon started"),
-        timeout = 2
-    })
+    -- Start full Tailscale (daemon + CLI connect) quietly.
+    -- Request the network first so the daemon doesn't hang with Wi-Fi off.
+    NetworkMgr:runWhenOnline(function()
+        os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale daemon started"),
+            timeout = 2
+        })
+    end)
 end
 
 
@@ -366,11 +374,15 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
-    UIManager:show(InfoMessage:new{
-        text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
-        timeout = 4
-    })
+    -- Request the network to be up before starting Tailscale, otherwise the
+    -- interface hangs forever waiting on a connection that never comes (Wi-Fi off).
+    NetworkMgr:runWhenOnline(function()
+        os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
+            timeout = 4
+        })
+    end)
 
     -- autosync-on-connect removed: sync must be triggered manually if desired
 end
