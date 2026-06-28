@@ -366,7 +366,18 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
+    -- Show a persistent message before the blocking call so the user knows
+    -- why the UI is unresponsive while Tailscale is coming up.
+    local starting_msg = InfoMessage:new{
+        text = _("Starting Tailscale...\nThis may take a moment."),
+        timeout = 0  -- persistent until dismissed explicitly
+    }
+    UIManager:show(starting_msg)
+    UIManager:forceRePaint()
+
     os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+
+    UIManager:close(starting_msg)
     UIManager:show(InfoMessage:new{
         text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
         timeout = 4
