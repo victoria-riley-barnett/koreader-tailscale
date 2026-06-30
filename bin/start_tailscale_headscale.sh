@@ -74,10 +74,19 @@ if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
     AUTH_KEY=$(grep "^tskey-" auth.key | head -1 | tr -d ' ' | tr -d '#')
 fi
 
+quote_arg() {
+    printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
+}
+
+EXIT_NODE_FLAGS=""
+if [ "${USE_EXIT_NODE:-0}" = "1" ] && [ -n "${EXIT_NODE:-}" ]; then
+    EXIT_NODE_FLAGS=" --exit-node=$(quote_arg "$EXIT_NODE") --exit-node-allow-lan-access"
+fi
+
 # Build command with login-server
 # --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook)
 # --netfilter-mode=off: avoid nftables/iptables reconfig stalls on constrained e-reader kernels.
-CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
+CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off$EXIT_NODE_FLAGS"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
 
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
@@ -90,7 +99,7 @@ if [ $RC -ne 0 ]; then
         if [ -n "$SUG_HOST" ]; then
             HOST_FLAG="--hostname=$SUG_HOST"
         fi
-        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
+        CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off$EXIT_NODE_FLAGS"
         [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
         sh -c "$CMD" < /dev/null > tailscale.log 2>&1
         RC=$?

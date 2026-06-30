@@ -3,6 +3,8 @@ local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
+local LuaSettings = require("luasettings")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
@@ -41,6 +43,9 @@ end
 function TailscalePlugin:init()
     logger.info("Tailscale plugin initializing")
     self.plugin_dir = DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
+    self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/tailscale.lua")
+    self.settings:readSetting("use_exit_node", false)
+    self.settings:readSetting("exit_node", "")
     
     -- Detect platform-specific paths
     self.ts_dir, self.ts_arch = self:detectPlatform()
@@ -50,6 +55,29 @@ function TailscalePlugin:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+end
+
+function TailscalePlugin:flushSettings()
+    if self.settings then
+        self.settings:flush()
+    end
+end
+
+function TailscalePlugin:shellQuote(value)
+    value = tostring(value or "")
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+function TailscalePlugin:getStartEnvironment()
+    local env = "TS_DIR=" .. self:shellQuote(self.ts_dir)
+    if self.settings and self.settings:readSetting("use_exit_node") then
+        local exit_node = self.settings:readSetting("exit_node") or ""
+        exit_node = exit_node:gsub("^%s+", ""):gsub("%s+$", "")
+        if exit_node ~= "" then
+            env = env .. " USE_EXIT_NODE=1 EXIT_NODE=" .. self:shellQuote(exit_node)
+        end
+    end
+    return env
 end
 
 function TailscalePlugin:getBinDir()
@@ -95,7 +123,7 @@ function TailscalePlugin:onToggleTailscale(callback)
 end
 
 function TailscalePlugin:onFlushSettings()
-    -- Load settings if any
+    self:flushSettings()
 end
 
 function TailscalePlugin:addToMainMenu(menu_items)
@@ -151,6 +179,32 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         end
                     },
                     {
+                        text = _("Enable exit node"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self.settings and self.settings:readSetting("use_exit_node")
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("use_exit_node", not self.settings:readSetting("use_exit_node"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text_func = function()
+                            local exit_node = self.settings and self.settings:readSetting("exit_node") or ""
+                            if exit_node and exit_node ~= "" then
+                                return _("Exit node") .. ": " .. exit_node
+                            end
+                            return _("Exit node")
+                        end,
+                        callback = function()
+                            self:configureExitNode()
+                        end
+                    },
+                    {
                         text = _("Start with Headscale"),
                         callback = function()
                             -- Ensure a Headscale URL is configured before attempting to start
@@ -177,7 +231,7 @@ function TailscalePlugin:addToMainMenu(menu_items)
                             local s = io.open(script, "r")
                             if s then
                                 s:close()
-                                os.execute("TS_DIR=" .. self.ts_dir .. " " .. script)
+                                os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(script))
                                 UIManager:show(InfoMessage:new{
                                     text = _("Started Tailscale (Headscale)"),
                                     timeout = 3
@@ -323,7 +377,7 @@ end
 
 function TailscalePlugin:startDaemon()
     -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(self.plugin_dir .. "/bin/start_tailscale.sh"))
     UIManager:show(InfoMessage:new{
         text = _("Tailscale daemon started"),
         timeout = 2
@@ -366,7 +420,7 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
+    os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(self.plugin_dir .. "/bin/start_tailscale.sh"))
     UIManager:show(InfoMessage:new{
         text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
         timeout = 4
@@ -530,6 +584,46 @@ function TailscalePlugin:configureHeadscale()
         timeout = 8
     })
 end
+
+function TailscalePlugin:configureExitNode()
+    local exit_node = self.settings and self.settings:readSetting("exit_node") or ""
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Exit node"),
+        input = exit_node or "",
+        input_hint = _("Hostname, MagicDNS name, or Tailscale IP"),
+        description = _("Route traffic through this Tailscale exit node when enabled."),
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local value = dialog:getInputText() or ""
+                        value = value:gsub("^%s+", ""):gsub("%s+$", "")
+                        self.settings:saveSetting("exit_node", value)
+                        self:flushSettings()
+                        UIManager:close(dialog)
+                        UIManager:show(InfoMessage:new{
+                            text = _("Exit node saved. Restart Tailscale to apply."),
+                            timeout = 3
+                        })
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
 function TailscalePlugin:uninstallTailscale()
     UIManager:show(InfoMessage:new{
         text = _("Uninstalling Tailscale...\nThis will remove all files and stop the service."),
