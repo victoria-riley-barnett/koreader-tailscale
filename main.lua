@@ -12,6 +12,7 @@ local json = require("json")
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
     is_doc_only = false,
+    http_proxy_url = "http://127.0.0.1:1056",
 }
 
 --- Detect CPU architecture for Tailscale binary download.
@@ -46,6 +47,8 @@ function TailscalePlugin:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/tailscale.lua")
     self.settings:readSetting("use_exit_node", false)
     self.settings:readSetting("exit_node", "")
+    self.settings:readSetting("auto_http_proxy", false)
+    self.settings:readSetting("http_proxy_backup_active", false)
     
     -- Detect platform-specific paths
     self.ts_dir, self.ts_arch = self:detectPlatform()
@@ -78,6 +81,110 @@ function TailscalePlugin:getStartEnvironment()
         end
     end
     return env
+end
+
+function TailscalePlugin:commandSucceeded(ok, reason, code)
+    if ok == true then
+        return true
+    end
+    if ok == 0 then
+        return true
+    end
+    if reason == "exit" and code == 0 then
+        return true
+    end
+    return false
+end
+
+function TailscalePlugin:runStartScript(script)
+    local ok, reason, code = os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(script))
+    return self:commandSucceeded(ok, reason, code)
+end
+
+function TailscalePlugin:getNetworkManager()
+    local ok, network_mgr = pcall(require, "ui/network/manager")
+    if ok then
+        return network_mgr
+    end
+    logger.warn("Tailscale plugin: failed to load NetworkMgr for HTTP proxy management")
+    return nil
+end
+
+function TailscalePlugin:saveHTTPProxyBackup()
+    if self.settings:readSetting("http_proxy_backup_active") then
+        return
+    end
+
+    self.settings:saveSetting("http_proxy_backup_enabled", G_reader_settings:readSetting("http_proxy_enabled") and true or false)
+    self.settings:saveSetting("http_proxy_backup_value", G_reader_settings:readSetting("http_proxy") or "")
+    self.settings:saveSetting("http_proxy_backup_active", true)
+    self:flushSettings()
+end
+
+function TailscalePlugin:enableHTTPProxyIfNeeded()
+    if not self.settings:readSetting("auto_http_proxy") then
+        return
+    end
+
+    local network_mgr = self:getNetworkManager()
+    if not network_mgr or not network_mgr.setHTTPProxy then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
+            timeout = 5
+        })
+        return
+    end
+
+    self:saveHTTPProxyBackup()
+    local ok = pcall(function()
+        network_mgr:setHTTPProxy(self.http_proxy_url)
+    end)
+    if not ok then
+        self:restoreHTTPProxyBackup(true)
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
+            timeout = 5
+        })
+    end
+end
+
+function TailscalePlugin:restoreHTTPProxyBackup(silent)
+    if not self.settings:readSetting("http_proxy_backup_active") then
+        return
+    end
+
+    local network_mgr = self:getNetworkManager()
+    if not network_mgr or not network_mgr.setHTTPProxy then
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
+                timeout = 5
+            })
+        end
+        return
+    end
+
+    local backup_enabled = self.settings:readSetting("http_proxy_backup_enabled")
+    local backup_value = self.settings:readSetting("http_proxy_backup_value") or ""
+    local ok = pcall(function()
+        if backup_enabled and backup_value ~= "" then
+            network_mgr:setHTTPProxy(backup_value)
+        else
+            network_mgr:setHTTPProxy(nil)
+        end
+    end)
+
+    if ok then
+        self.settings:saveSetting("http_proxy_backup_active", false)
+        self.settings:delSetting("http_proxy_backup_enabled")
+        self.settings:delSetting("http_proxy_backup_value")
+        self:flushSettings()
+    elseif not silent then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
+            timeout = 5
+        })
+    end
 end
 
 function TailscalePlugin:getBinDir()
@@ -205,6 +312,20 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         end
                     },
                     {
+                        text = _("Automatically configure HTTP proxy"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self.settings and self.settings:readSetting("auto_http_proxy")
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("auto_http_proxy", not self.settings:readSetting("auto_http_proxy"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
                         text = _("Start with Headscale"),
                         callback = function()
                             -- Ensure a Headscale URL is configured before attempting to start
@@ -231,7 +352,9 @@ function TailscalePlugin:addToMainMenu(menu_items)
                             local s = io.open(script, "r")
                             if s then
                                 s:close()
-                                os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(script))
+                                if self:runStartScript(script) then
+                                    self:enableHTTPProxyIfNeeded()
+                                end
                                 UIManager:show(InfoMessage:new{
                                     text = _("Started Tailscale (Headscale)"),
                                     timeout = 3
@@ -377,7 +500,9 @@ end
 
 function TailscalePlugin:startDaemon()
     -- Start full Tailscale (daemon + CLI connect) quietly
-    os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(self.plugin_dir .. "/bin/start_tailscale.sh"))
+    if self:runStartScript(self.plugin_dir .. "/bin/start_tailscale.sh") then
+        self:enableHTTPProxyIfNeeded()
+    end
     UIManager:show(InfoMessage:new{
         text = _("Tailscale daemon started"),
         timeout = 2
@@ -420,7 +545,9 @@ function TailscalePlugin:connectTailscale()
         return
     end
     
-    os.execute(self:getStartEnvironment() .. " " .. self:shellQuote(self.plugin_dir .. "/bin/start_tailscale.sh"))
+    if self:runStartScript(self.plugin_dir .. "/bin/start_tailscale.sh") then
+        self:enableHTTPProxyIfNeeded()
+    end
     UIManager:show(InfoMessage:new{
         text = _("Tailscale connection started\nCheck " .. self:getLogPath() .. " for status"),
         timeout = 4
@@ -430,7 +557,8 @@ function TailscalePlugin:connectTailscale()
 end
 
 function TailscalePlugin:disconnectTailscale()
-    os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/stop_tailscale.sh")
+    os.execute("TS_DIR=" .. self:shellQuote(self.ts_dir) .. " " .. self:shellQuote(self.plugin_dir .. "/bin/stop_tailscale.sh"))
+    self:restoreHTTPProxyBackup()
     UIManager:show(InfoMessage:new{
         text = _("Tailscale disconnected"),
         timeout = 2
