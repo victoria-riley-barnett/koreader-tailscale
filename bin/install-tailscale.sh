@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-TS_FALLBACK_VER="1.96.2"
+TS_FALLBACK_VER="1.98.3"
 TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
 TS_ARCH="${2:-}"
 BIN_DIR="$TS_DIR/bin"
@@ -9,16 +9,51 @@ BIN_DIR="$TS_DIR/bin"
 mkdir -p "$BIN_DIR"
 cd "$BIN_DIR" || exit 1
 
+fetch_stdout() {
+    _url="$1"
+    for _wget in /usr/bin/wget /bin/wget wget; do
+        if [ -x "$_wget" ] || command -v "$_wget" >/dev/null 2>&1; then
+            "$_wget" -q -O - "$_url" 2>/dev/null && return 0
+        fi
+    done
+    for _curl in /usr/bin/curl /bin/curl curl; do
+        if [ -x "$_curl" ] || command -v "$_curl" >/dev/null 2>&1; then
+            "$_curl" -sf "$_url" 2>/dev/null && return 0
+        fi
+    done
+    return 1
+}
+
+fetch_file() {
+    _url="$1"
+    _out="$2"
+    for _wget in /usr/bin/wget /bin/wget wget; do
+        if [ -x "$_wget" ] || command -v "$_wget" >/dev/null 2>&1; then
+            "$_wget" -q -O "$_out" "$_url" 2>/dev/null && [ -s "$_out" ] && return 0
+            rm -f "$_out" 2>/dev/null || true
+        fi
+    done
+    for _curl in /usr/bin/curl /bin/curl curl; do
+        if [ -x "$_curl" ] || command -v "$_curl" >/dev/null 2>&1; then
+            "$_curl" -sf -o "$_out" "$_url" 2>/dev/null && [ -s "$_out" ] && return 0
+            rm -f "$_out" 2>/dev/null || true
+        fi
+    done
+    return 1
+}
+
 # Fetch latest stable version from Tailscale's JSON API.
 # set -e is suspended here: grep exits 1 on no-match and would abort the script.
 set +e
 TS_VER=""
-_json=$(wget -qO- "https://pkgs.tailscale.com/stable/?mode=json" 2>/dev/null)
-if [ -z "$_json" ]; then
-    _json=$(curl -sf "https://pkgs.tailscale.com/stable/?mode=json" 2>/dev/null)
-fi
+_json=$(fetch_stdout "https://pkgs.tailscale.com/stable/?mode=json")
 if [ -n "$_json" ]; then
-    TS_VER=$(printf '%s' "$_json" | grep -o '"version":"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*')
+    if command -v grep >/dev/null 2>&1; then
+        TS_VER=$(printf '%s\n' "$_json" | grep -o '"[Vv]ersion"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null | head -1 | grep -o '[0-9][0-9.]*' 2>/dev/null | head -1)
+    fi
+    if [ -z "$TS_VER" ] && command -v sed >/dev/null 2>&1; then
+        TS_VER=$(printf '%s\n' "$_json" | sed -n 's/.*"[Vv]ersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    fi
 fi
 # Fall back to hardcoded version if fetch failed or returned nothing
 if [ -z "$TS_VER" ]; then
@@ -54,9 +89,8 @@ ARCHIVE="tailscale_${TS_ARCH}.tgz"
 rm -f "$ARCHIVE" 2>/dev/null || true
 
 # Try multiple download methods
-wget -q -O "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || \
-curl -s -o "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || \
-busybox wget -q -O "$ARCHIVE" "http://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || true
+fetch_file "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" "$ARCHIVE" || \
+    busybox wget -q -O "$ARCHIVE" "http://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${TS_ARCH}.tgz" 2>/dev/null || true
 
 [ -s "$ARCHIVE" ] || exit 1
 
