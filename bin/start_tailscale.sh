@@ -1,8 +1,4 @@
 #!/bin/sh
-<<<<<<< Updated upstream
-TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
-BIN_DIR="$TS_DIR/bin"
-=======
 # Determine bin directory (where this script is located)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # TS_DIR can be set by the caller (e.g., plugin) to point to tailscale installation directory
@@ -14,7 +10,6 @@ else
     BIN_DIR="$SCRIPT_DIR"
 fi
 mkdir -p "$BIN_DIR"
->>>>>>> Stashed changes
 cd "$BIN_DIR" || exit 1
 
 # POSIX-friendly start script for Tailscale (standard)
@@ -28,7 +23,6 @@ cd "$BIN_DIR" || exit 1
 killall tailscaled 2>/dev/null || true
 sleep 2
 
-<<<<<<< Updated upstream
 # State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
 # Copy any previous state from persistent storage on startup.
 STATE_DIR="/tmp/tailscale"
@@ -66,9 +60,15 @@ if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
     ip link set lo up 2>/dev/null || true
 fi
 
-# Use userspace networking unconditionally — kernel TUN on e-reader devices triggers
-# wgengine watchdog timeouts on Reconfig. Outbound connections work via SOCKS5/HTTP proxy.
-TUN_FLAG="--tun=userspace-networking"
+# Determine TUN mode:
+# Prefer kernel TUN (/dev/net/tun) when available — users have reported
+# userspace-networking breaks outbound connections on some devices.
+# Fall back to userspace-networking when kernel TUN isn't available.
+if [ -c /dev/net/tun ]; then
+    TUN_FLAG=""
+else
+    TUN_FLAG="--tun=userspace-networking"
+fi
 
 # Start daemon with the appropriate state directory
 # --socks5-server / --outbound-http-proxy-listen: proxies so KOReader can reach
@@ -77,17 +77,6 @@ TUN_FLAG="--tun=userspace-networking"
 
 # Wait for daemon socket to become available
 sleep 3
-=======
-# Determine TUN mode
-if [ -c /dev/net/tun ]; then
-    TUN_FLAG=""
-else
-    TUN_FLAG="--tun=userspace-networking"
-fi
-
-# Start daemon with optional userspace networking and SOCKS5 proxy
-nohup ./tailscaled --statedir="$BIN_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 > tailscaled.log 2>&1 &
->>>>>>> Stashed changes
 
 # Get current hostname (if any)
 HOSTNAME=""
@@ -97,10 +86,10 @@ fi
 HOST_FLAG=""
 [ -n "$HOSTNAME" ] && HOST_FLAG="--hostname=$HOSTNAME"
 
-# Read auth key if present
+# Read auth key if present (supports Tailscale tskey- and Headscale hskey-auth-)
 AUTH_KEY=""
-if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
-    AUTH_KEY=$(grep "^tskey-" auth.key | head -1 | tr -d ' ' | tr -d '#')
+if [ -f auth.key ] && grep -qE "^(tskey-|hskey-auth-)" auth.key; then
+    AUTH_KEY=$(grep -E "^(tskey-|hskey-auth-)" auth.key | head -1 | tr -d ' ' | tr -d '#')
 fi
 
 # Build command

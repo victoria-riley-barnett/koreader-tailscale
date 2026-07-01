@@ -1,20 +1,14 @@
 #!/bin/sh
-<<<<<<< Updated upstream
-TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
-BIN_DIR="$TS_DIR/bin"
-=======
 # Determine bin directory (where this script is located)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # TS_DIR can be set by the caller (e.g., plugin) to point to tailscale installation directory
-# If TS_DIR is set, use TS_DIR/bin as BIN_DIR (where binaries are installed)
-# Otherwise, default to script directory
+# If TS_DIR is set, use TS_DIR/bin as BIN_DIR
 if [ -n "$TS_DIR" ]; then
     BIN_DIR="$TS_DIR/bin"
 else
     BIN_DIR="$SCRIPT_DIR"
 fi
 mkdir -p "$BIN_DIR"
->>>>>>> Stashed changes
 cd "$BIN_DIR" || exit 1
 
 # POSIX-friendly headscale-aware start script
@@ -36,7 +30,6 @@ HS_URL=$(tr -d '\r\n' < "$HEADSCALE_FILE" 2>/dev/null)
 killall tailscaled 2>/dev/null || true
 sleep 2
 
-<<<<<<< Updated upstream
 # State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
 STATE_DIR="/tmp/tailscale"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
@@ -56,8 +49,7 @@ export HOME="$TS_DIR"
 export XDG_CACHE_HOME="$STATE_DIR"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
-# Ensure loopback has 127.0.0.1 — required for SOCKS5/HTTP proxy to bind.
-# Many e-reader firmwares (PocketBook, Kobo) don't configure lo at boot.
+# Ensure loopback has 127.0.0.1
 if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
     ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
     if [ -x /ebrmain/cramfs/bin/sudo ]; then
@@ -67,23 +59,15 @@ if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
     ip link set lo up 2>/dev/null || true
 fi
 
-# Use userspace networking unconditionally — kernel TUN on e-reader devices triggers
-# wgengine watchdog timeouts on Reconfig. Outbound connections work via SOCKS5/HTTP proxy.
-TUN_FLAG="--tun=userspace-networking"
-
-# Start daemon
-./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
-=======
-# Determine TUN mode
+# Determine TUN mode: prefer kernel TUN, fall back to userspace-networking
 if [ -c /dev/net/tun ]; then
     TUN_FLAG=""
 else
     TUN_FLAG="--tun=userspace-networking"
 fi
 
-# Start daemon with optional userspace networking and SOCKS5 proxy
-nohup ./tailscaled --statedir="$BIN_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 > tailscaled.log 2>&1 &
->>>>>>> Stashed changes
+# Start daemon
+./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
 sleep 3
 
 # Get current hostname (if any)
@@ -94,14 +78,14 @@ fi
 HOST_FLAG=""
 [ -n "$HOSTNAME" ] && HOST_FLAG="--hostname=$HOSTNAME"
 
-# Read auth key if present
+# Read auth key if present (supports Tailscale tskey- and Headscale hskey-auth-)
 AUTH_KEY=""
-if [ -f auth.key ] && grep -q "^tskey-" auth.key; then
-    AUTH_KEY=$(grep "^tskey-" auth.key | head -1 | tr -d ' ' | tr -d '#')
+if [ -f auth.key ] && grep -qE "^(tskey-|hskey-auth-)" auth.key; then
+    AUTH_KEY=$(grep -E "^(tskey-|hskey-auth-)" auth.key | head -1 | tr -d ' ' | tr -d '#')
 fi
 
 # Build command with login-server
-# --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook)
+# --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf
 # --netfilter-mode=off: avoid nftables/iptables reconfig stalls on constrained e-reader kernels.
 CMD="./tailscale up --login-server=\"$HS_URL\" $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
 [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""

@@ -365,6 +365,21 @@ function TailscalePlugin:connectTailscale()
         })
         return
     end
+
+    -- Check for network connectivity before attempting to start
+    local net_check = io.popen("ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 && echo 'ok' || echo 'no'")
+    local net_result = ""
+    if net_check then
+        net_result = net_check:read("*a")
+        net_check:close()
+    end
+    if not net_result or net_result:match("no") then
+        UIManager:show(InfoMessage:new{
+            text = _("No network connectivity detected.\nPlease enable WiFi before starting Tailscale."),
+            timeout = 6
+        })
+        return
+    end
     
     os.execute("TS_DIR=" .. self.ts_dir .. " " .. self.plugin_dir .. "/bin/start_tailscale.sh")
     UIManager:show(InfoMessage:new{
@@ -435,8 +450,15 @@ function TailscalePlugin:showStatus()
         table.insert(lines, "State: " .. backend)
         if parsed.Self and type(parsed.Self) == "table" then
             local ips = parsed.Self.TailscaleIPs or {}
-            if #ips > 0 then
+            -- TailscaleIPs can be a table, function, or nil depending on version
+            if type(ips) == "table" and #ips > 0 then
                 table.insert(lines, "IPs: " .. join(ips, ", "))
+            elseif type(ips) == "function" then
+                -- Tailscale v1.80+ exposes TailscaleIPs as a method
+                local ok, result = pcall(ips)
+                if ok and type(result) == "table" and #result > 0 then
+                    table.insert(lines, "IPs: " .. join(result, ", "))
+                end
             end
             if parsed.Self.HostName then
                 table.insert(lines, "Device: " .. tostring(parsed.Self.HostName))
@@ -479,8 +501,8 @@ function TailscalePlugin:showStatus()
 end
 
 function TailscalePlugin:configureAuthKey()
-    -- Check current auth key status
-    local auth_check = io.popen("grep '^tskey-' '" .. self:getAuthKeyPath() .. "' 2>/dev/null")
+    -- Check current auth key status (supports Tailscale tskey- and Headscale hskey-auth-)
+    local auth_check = io.popen("grep -E '^(tskey-|hskey-auth-)' '" .. self:getAuthKeyPath() .. "' 2>/dev/null")
     local auth_result = ""
     if auth_check then
         auth_result = auth_check:read("*a")
@@ -494,7 +516,7 @@ function TailscalePlugin:configureAuthKey()
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _("No valid auth key found.\nPlease edit:\n" .. self:getAuthKeyPath() .. "\nwith your Tailscale auth key\nGet from: login.tailscale.com/admin/settings/keys"),
+            text = _("No valid auth key found.\nPlease edit:\n" .. self:getAuthKeyPath() .. "\nwith your Tailscale or Headscale auth key."),
             timeout = 8
         })
     end

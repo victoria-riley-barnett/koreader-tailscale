@@ -4,11 +4,7 @@ return {
     fullname = _("Tailscale VPN"),
     description = _("Secure remote access and file sync via Tailscale"),
     author = "Victoria B.",
-<<<<<<< Updated upstream
-    version = "1.1.2",
-=======
-    version = "1.1.0",
->>>>>>> Stashed changes
+    version = "1.1.3",
     dependencies = {},
     can_configure = true,
     has_widget = true,
