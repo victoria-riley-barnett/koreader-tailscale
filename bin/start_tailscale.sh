@@ -1,6 +1,20 @@
 #!/bin/sh
+<<<<<<< Updated upstream
 TS_DIR="${1:-${TS_DIR:-/mnt/us/tailscale}}"
 BIN_DIR="$TS_DIR/bin"
+=======
+# Determine bin directory (where this script is located)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# TS_DIR can be set by the caller (e.g., plugin) to point to tailscale installation directory
+# If TS_DIR is set, use TS_DIR/bin as BIN_DIR (where binaries are installed)
+# Otherwise, default to script directory
+if [ -n "$TS_DIR" ]; then
+    BIN_DIR="$TS_DIR/bin"
+else
+    BIN_DIR="$SCRIPT_DIR"
+fi
+mkdir -p "$BIN_DIR"
+>>>>>>> Stashed changes
 cd "$BIN_DIR" || exit 1
 
 # POSIX-friendly start script for Tailscale (standard)
@@ -14,6 +28,7 @@ cd "$BIN_DIR" || exit 1
 killall tailscaled 2>/dev/null || true
 sleep 2
 
+<<<<<<< Updated upstream
 # State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
 # Copy any previous state from persistent storage on startup.
 STATE_DIR="/tmp/tailscale"
@@ -62,6 +77,17 @@ TUN_FLAG="--tun=userspace-networking"
 
 # Wait for daemon socket to become available
 sleep 3
+=======
+# Determine TUN mode
+if [ -c /dev/net/tun ]; then
+    TUN_FLAG=""
+else
+    TUN_FLAG="--tun=userspace-networking"
+fi
+
+# Start daemon with optional userspace networking and SOCKS5 proxy
+nohup ./tailscaled --statedir="$BIN_DIR/" $TUN_FLAG --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 > tailscaled.log 2>&1 &
+>>>>>>> Stashed changes
 
 # Get current hostname (if any)
 HOSTNAME=""
