@@ -1,18 +1,12 @@
 #!/bin/sh
-# Determine bin directory (where this script is located)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# TS_DIR can be set by the caller (e.g., plugin) to point to tailscale installation directory
-# If TS_DIR is set, use TS_DIR/bin as BIN_DIR (where binaries are installed)
-# Otherwise, default to script directory
-if [ -n "$TS_DIR" ]; then
-    BIN_DIR="$TS_DIR/bin"
-else
-    BIN_DIR="$SCRIPT_DIR"
-fi
-mkdir -p "$BIN_DIR"
-cd "$BIN_DIR" || exit 1
+# Thin executor: all decisions (TUN mode, state dir, auth key, headscale, flags)
+# are made in Lua and passed via environment variables.
+# This script just stops old instances and launches tailscaled + tailscale up.
 
-# POSIX-friendly start script for Tailscale (standard)
+BIN_DIR="${TS_BIN:-$(cd "$(dirname "$0")" && pwd)}"
+STATEDIR="${TS_STATEDIR:-$BIN_DIR}"
+
+cd "$BIN_DIR" || exit 1
 
 # Ensure binaries exist
 [ -f ./tailscaled ] || exit 1
@@ -23,97 +17,35 @@ cd "$BIN_DIR" || exit 1
 killall tailscaled 2>/dev/null || true
 sleep 2
 
-# State directory: use /tmp/tailscale (tmpfs, supports chmod) as runtime state.
-# Copy any previous state from persistent storage on startup.
-STATE_DIR="/tmp/tailscale"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
+# Start daemon — all flags pre-built by Lua
+./tailscaled \
+    --statedir="$STATEDIR/" \
+    ${TS_TUN_FLAG} \
+    --socks5-server=127.0.0.1:1055 \
+    --outbound-http-proxy-listen=127.0.0.1:1056 \
+    > tailscaled.log 2>&1 &
 
-# Test if persistent storage supports chmod; if so, use it directly
-_test_file="$BIN_DIR/.chmod_test_$$"
-if touch "$_test_file" 2>/dev/null && chmod 0600 "$_test_file" 2>/dev/null; then
-    STATE_DIR="$BIN_DIR"
-    rm -f "$_test_file"
-else
-    rm -f "$_test_file" 2>/dev/null
-    # Copy existing state to tmpfs so we don't lose node identity on restart
-    for f in tailscaled.state tailscaled.log.conf; do
-        [ -f "$BIN_DIR/$f" ] && cp -f "$BIN_DIR/$f" "$STATE_DIR/$f" 2>/dev/null || true
-    done
-fi
-
-# Redirect cache/home to writable storage (needed on PocketBook and similar)
-export HOME="$TS_DIR"
-export XDG_CACHE_HOME="$STATE_DIR"
-mkdir -p "$STATE_DIR" 2>/dev/null || true
-
-# Ensure loopback has 127.0.0.1 — required for SOCKS5/HTTP proxy to bind.
-# Many e-reader firmwares (PocketBook, Kobo) don't configure lo at boot.
-if ! ifconfig lo 2>/dev/null | grep -q '127\.0\.0\.1'; then
-    # ifconfig is universal across KOReader's busybox environments
-    ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
-    # PocketBook-specific NOPASSWD sudo
-    if [ -x /ebrmain/cramfs/bin/sudo ]; then
-        /ebrmain/cramfs/bin/sudo /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null || true
-    fi
-    # iproute2 fallback (reMarkable, Cervantes, desktop Linux)
-    ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
-    ip link set lo up 2>/dev/null || true
-fi
-
-# Determine TUN mode:
-# Prefer kernel TUN (/dev/net/tun) when available — users have reported
-# userspace-networking breaks outbound connections on some devices.
-# Fall back to userspace-networking when kernel TUN isn't available.
-if [ -c /dev/net/tun ]; then
-    TUN_FLAG=""
-else
-    TUN_FLAG="--tun=userspace-networking"
-fi
-
-# Start daemon with the appropriate state directory
-# --socks5-server / --outbound-http-proxy-listen: proxies so KOReader can reach
-#   Tailscale IPs without a TUN interface (userspace-networking mode).
-./tailscaled --statedir="$STATE_DIR/" $TUN_FLAG --socks5-server=127.0.0.1:1055 --outbound-http-proxy-listen=127.0.0.1:1056 > tailscaled.log 2>&1 &
-
-# Wait for daemon socket to become available
 sleep 3
 
-# Get current hostname (if any)
-HOSTNAME=""
-if ./tailscale status --json >/dev/null 2>&1; then
-    HOSTNAME=$(./tailscale status --json 2>/dev/null | sed -n 's/.*"HostName":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
-fi
-HOST_FLAG=""
-[ -n "$HOSTNAME" ] && HOST_FLAG="--hostname=$HOSTNAME"
+# Run tailscale up — flags pre-built by Lua
+CMD="./tailscale up $TS_UP_FLAGS"
+[ -n "$TS_AUTH_KEY" ] && CMD="$CMD --auth-key=\"$TS_AUTH_KEY\""
+[ -n "$TS_LOGIN_SERVER" ] && CMD="$CMD --login-server=\"$TS_LOGIN_SERVER\""
 
-# Read auth key if present (supports Tailscale tskey- and Headscale hskey-auth-)
-AUTH_KEY=""
-if [ -f auth.key ] && grep -qE "^(tskey-|hskey-auth-)" auth.key; then
-    AUTH_KEY=$(grep -E "^(tskey-|hskey-auth-)" auth.key | head -1 | tr -d ' ' | tr -d '#')
-fi
-
-# Build command
-# --accept-dns=false: prevent tailscale from attempting to modify /etc/resolv.conf (read-only on PocketBook).
-# --netfilter-mode=off: avoid nftables/iptables reconfig stalls on constrained e-reader kernels.
-CMD="./tailscale up $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
-[ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
-
-# Run with stdin from /dev/null to prevent tailscale up from hanging if it
-# needs interactive confirmation (e.g. pref-change prompt in v1.44+)
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
 RC=$?
 
-# If failed because pref-change confirmation is needed, retry with the suggested hostname.
+# Retry if pref-change confirmation needed
 if [ $RC -ne 0 ]; then
     if grep -qE "requires mentioning all non-default flags|would change prefs" tailscale.log 2>/dev/null; then
         SUG_HOST=$(sed -n "s/.*--hostname=\([^[:space:]]*\).*/\1/p" tailscale.log | head -n1)
         if [ -n "$SUG_HOST" ]; then
-            HOST_FLAG="--hostname=$SUG_HOST"
+            CMD="./tailscale up --hostname='$SUG_HOST' --accept-routes --accept-dns=false --netfilter-mode=off"
+            [ -n "$TS_AUTH_KEY" ] && CMD="$CMD --auth-key=\"$TS_AUTH_KEY\""
+            [ -n "$TS_LOGIN_SERVER" ] && CMD="$CMD --login-server=\"$TS_LOGIN_SERVER\""
+            sh -c "$CMD" < /dev/null > tailscale.log 2>&1
+            RC=$?
         fi
-        CMD="./tailscale up $HOST_FLAG --accept-routes --accept-dns=false --netfilter-mode=off"
-        [ -n "$AUTH_KEY" ] && CMD="$CMD --auth-key=\"$AUTH_KEY\""
-        sh -c "$CMD" < /dev/null > tailscale.log 2>&1
-        RC=$?
     fi
 fi
 
