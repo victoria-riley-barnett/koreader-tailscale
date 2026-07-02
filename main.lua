@@ -148,13 +148,19 @@ end
 function TailscalePlugin:readAuthKey()
     local f = io.open(self:getAuthKeyPath(), "r")
     if not f then return nil end
-    local key = f:read("*a") or ""
-    f:close()
-    key = key:gsub("%s+$", ""):gsub("^%s+", "")
-    -- Accept Tailscale (tskey-) and Headscale (hskey-auth-) formats
-    if key:match("^tskey%-") or key:match("^hskey%-auth%-") then
-        return key
+    -- Scan lines for a valid key, skipping comments and blank lines
+    for line in f:lines() do
+        line = line:gsub("^%s+", ""):gsub("%s+$", "")
+        -- Skip comment lines (#) and blanks
+        if line ~= "" and not line:match("^#") then
+            -- Accept Tailscale (tskey-) and Headscale (hskey-auth-) formats
+            if line:match("^tskey%-") or line:match("^hskey%-auth%-") then
+                f:close()
+                return line
+            end
+        end
     end
+    f:close()
     return nil
 end
 
@@ -171,60 +177,25 @@ function TailscalePlugin:readHeadscaleUrl()
     return nil
 end
 
-function TailscalePlugin:readHostname()
-    local h = io.popen("'" .. self.ts_bin .. "/tailscale' status --json 2>/dev/null")
-    if not h then return nil end
-    local raw = h:read("*a") or ""
-    h:close()
-    local ok, parsed = pcall(function() return json.decode(raw) end)
-    if ok and parsed and parsed.Self and parsed.Self.HostName then
-        return parsed.Self.HostName
-    end
-    return nil
-end
-
 -- ─── command builders (Lua owns all flag decisions) ───────────────
 
-function TailscalePlugin:buildDaemonCommand(state_dir)
-    -- Build the tailscaled startup command.
-    -- All flags decided here, passed to thin shell executor via env vars.
-    local tun_flag = self:hasTunDevice() and "" or "--tun=userspace-networking"
-    local cmd = "./tailscaled"
-        .. " --statedir='" .. state_dir .. "/'"
-        .. " --socks5-server=127.0.0.1:1055"
-        .. " --outbound-http-proxy-listen=127.0.0.1:1056"
-    if tun_flag ~= "" then
-        cmd = cmd .. " " .. tun_flag
+function TailscalePlugin:resolveTunFlag()
+    -- Decide TUN mode: prefer kernel TUN, fall back to userspace-networking.
+    -- Passed to shell script via TS_TUN_FLAG env var.
+    if self:hasTunDevice() then
+        self._tun_flag = ""
+    else
+        self._tun_flag = "--tun=userspace-networking"
     end
-    -- Env vars for shell executor
-    self._daemon_cmd = cmd
-    self._daemon_state_dir = state_dir
-    self._daemon_tun_flag = tun_flag
 end
 
 function TailscalePlugin:buildUpCommand()
-    -- Build the tailscale up command.
-    -- Handles standard, headscale, auth key, hostname — all in one place.
-    local flags = "--accept-routes --accept-dns=false --netfilter-mode=off"
-
-    local hostname = self:readHostname()
-    if hostname then
-        flags = flags .. " --hostname='" .. hostname .. "'"
-    end
-
-    local headscale_url = self:readHeadscaleUrl()
-    if headscale_url then
-        flags = flags .. " --login-server='" .. headscale_url .. "'"
-    end
-
-    local auth_key = self:readAuthKey()
-    if auth_key then
-        flags = flags .. " --auth-key='" .. auth_key .. "'"
-    end
-
-    self._up_flags = flags
-    self._up_auth_key = auth_key
-    self._up_headscale_url = headscale_url
+    -- Build core flags only. Auth key, login-server, and hostname are
+    -- deferred to the shell script (needs running daemon for hostname,
+    -- and shell owns command reconstruction for the retry path).
+    self._up_flags = "--accept-routes --accept-dns=false --netfilter-mode=off"
+    self._up_auth_key = self:readAuthKey()
+    self._up_headscale_url = self:readHeadscaleUrl()
 end
 
 -- ─── thin shell executors ─────────────────────────────────────────
@@ -234,20 +205,20 @@ function TailscalePlugin:execStartScript()
     -- We pass everything through environment variables.
     local state_dir = self:resolveStateDir()
     self:ensureLoopback()
-    self:buildDaemonCommand(state_dir)
+    self:resolveTunFlag()
     self:buildUpCommand()
 
     local env = "TS_BIN='" .. self.ts_bin .. "'"
         .. " TS_STATEDIR='" .. state_dir .. "'"
-        .. " TS_TUN_FLAG='" .. (self._daemon_tun_flag or "") .. "'"
+        .. " TS_TUN_FLAG='" .. (self._tun_flag or "") .. "'"
+        .. " TS_UP_FLAGS='" .. (self._up_flags or "") .. "'"
+        .. " TS_DIR='" .. self.ts_dir .. "'"
     if self._up_headscale_url then
         env = env .. " TS_LOGIN_SERVER='" .. self._up_headscale_url .. "'"
     end
     if self._up_auth_key then
         env = env .. " TS_AUTH_KEY='" .. self._up_auth_key .. "'"
     end
-    env = env .. " TS_UP_FLAGS='" .. (self._up_flags or "") .. "'"
-    env = env .. " TS_DIR='" .. self.ts_dir .. "'"
 
     os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
 end
@@ -257,8 +228,9 @@ function TailscalePlugin:execStopScript()
 end
 
 function TailscalePlugin:execInstallScript()
-    os.execute("TS_BIN='" .. self.ts_bin .. "' TS_ARCH='" .. self.ts_arch .. "' sh '"
-        .. self.plugin_dir .. "/bin/install-tailscale.sh'")
+    -- Returns io.popen handle so caller can capture output
+    return io.popen("TS_BIN='" .. self.ts_bin .. "' TS_ARCH='" .. self.ts_arch .. "' sh '"
+        .. self.plugin_dir .. "/bin/install-tailscale.sh' 2>&1")
 end
 
 function TailscalePlugin:execUninstallScript()
@@ -340,8 +312,7 @@ function TailscalePlugin:installTailscale()
 end
 
 function TailscalePlugin:runInstallation()
-    local h = io.popen("TS_BIN='" .. self.ts_bin .. "' TS_ARCH='" .. self.ts_arch .. "' sh '"
-        .. self.plugin_dir .. "/bin/install-tailscale.sh' 2>&1")
+    local h = self:execInstallScript()
     if not h then
         if self.install_warning_msg then UIManager:close(self.install_warning_msg) end
         UIManager:show(InfoMessage:new{ text = _("Installation failed to start."), timeout = 6 })
@@ -377,6 +348,13 @@ end
 -- ─── daemon control ───────────────────────────────────────────────
 
 function TailscalePlugin:startDaemon()
+    if not self:binariesExist() then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale not installed."),
+            timeout = 3,
+        })
+        return
+    end
     self:execStartScript()
     UIManager:show(InfoMessage:new{ text = _("Tailscale daemon started"), timeout = 2 })
 end
