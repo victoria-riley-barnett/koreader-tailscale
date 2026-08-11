@@ -5,6 +5,7 @@
 
 BIN_DIR="${TS_BIN:-$(cd "$(dirname "$0")" && pwd)}"
 STATEDIR="${TS_STATEDIR:-$BIN_DIR}"
+NETWORK_MODE="${TS_NETWORK_MODE:-unknown}"
 
 cd "$BIN_DIR" || exit 1
 
@@ -19,13 +20,14 @@ export SSL_CERT_FILE=/mnt/onboard/.adds/koreader/data/ca-bundle.crt
 killall tailscaled 2>/dev/null || true
 sleep 2
 
-# Start daemon
+# Start daemon and record the selected networking mode before its own logs.
+printf 'Tailscale networking mode: %s\n' "$NETWORK_MODE" > tailscaled.log
 ./tailscaled \
     --statedir="$STATEDIR/" \
     ${TS_TUN_FLAG} \
     --socks5-server=127.0.0.1:1055 \
     --outbound-http-proxy-listen=127.0.0.1:1056 \
-    > tailscaled.log 2>&1 &
+    >> tailscaled.log 2>&1 &
 
 sleep 3
 

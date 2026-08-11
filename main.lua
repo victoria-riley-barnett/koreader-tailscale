@@ -96,11 +96,18 @@ function TailscalePlugin:hasNetwork()
 end
 
 function TailscalePlugin:hasTunDevice()
-    local h = io.popen("test -c /dev/net/tun && echo 'yes'")
+    local h = io.popen("test -c /dev/net/tun && test -r /dev/net/tun && test -w /dev/net/tun && echo 'yes'")
     if not h then return false end
     local result = h:read("*a") or ""
     h:close()
     return result:match("yes") ~= nil
+end
+
+function TailscalePlugin:isUserspaceForced()
+    local f = io.open(self:getBinDir() .. "/force-userspace", "r")
+    if not f then return false end
+    f:close()
+    return true
 end
 
 -- ─── state directory resolution (formerly shell logic) ────────────
@@ -185,12 +192,17 @@ end
 -- ─── command builders (Lua owns all flag decisions) ───────────────
 
 function TailscalePlugin:resolveTunFlag()
-    -- Decide TUN mode: prefer kernel TUN, fall back to userspace-networking.
-    -- Passed to shell script via TS_TUN_FLAG env var.
-    if self:hasTunDevice() then
-        self._tun_flag = ""
+    -- Prefer a usable kernel TUN device, with an escape hatch for unstable
+    -- e-reader kernels. Pass both the flag and selected mode to the executor.
+    if self:isUserspaceForced() then
+        self._tun_flag = "--tun=userspace-networking"
+        self._network_mode = "userspace (forced)"
+    elseif self:hasTunDevice() then
+        self._tun_flag = "--tun=tailscale0"
+        self._network_mode = "kernel TUN"
     else
         self._tun_flag = "--tun=userspace-networking"
+        self._network_mode = "userspace (no usable /dev/net/tun)"
     end
 end
 
@@ -216,6 +228,7 @@ function TailscalePlugin:execStartScript()
     local env = "TS_BIN='" .. self.ts_bin .. "'"
         .. " TS_STATEDIR='" .. state_dir .. "'"
         .. " TS_TUN_FLAG='" .. (self._tun_flag or "") .. "'"
+        .. " TS_NETWORK_MODE='" .. (self._network_mode or "unknown") .. "'"
         .. " TS_UP_FLAGS='" .. (self._up_flags or "") .. "'"
         .. " TS_DIR='" .. self.ts_dir .. "'"
     if self._up_headscale_url then

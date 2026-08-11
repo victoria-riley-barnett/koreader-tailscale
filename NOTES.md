@@ -8,11 +8,11 @@ The plugin installs Tailscale binaries into a `bin/` directory it manages. On mo
 
 All config files (`auth.key`, `headscale.url`) and logs (`tailscale.log`, `tailscaled.log`) live alongside the binaries.
 
-### Userspace networking
+### TUN and userspace networking
 
-The plugin always runs `tailscaled --tun=userspace-networking`. Kernel TUN on constrained e-reader kernels triggers `wgengine: watchdog timeout on Reconfig` — the WireGuard engine's `Reconfig` call times out when peer or route state changes. Userspace networking avoids that entirely. Outbound connections work via the SOCKS5/HTTP proxy listeners.
+The plugin uses kernel TUN (`--tun=tailscale0`) when `/dev/net/tun` is a readable and writable character device. Kernel mode provides transparent routing for KOReader features such as progress sync, OPDS, and other plugins.
 
-The device won't appear with a `tailscale0` interface and isn't directly addressable from the tailnet, but for the e-reader use case (outbound to a sync server, OPDS catalog, etc.) that doesn't matter.
+When TUN is unavailable, the plugin falls back to `--tun=userspace-networking`; outbound connections can then use the SOCKS5/HTTP CONNECT listeners. Some constrained e-reader kernels expose an unstable TUN driver that can trigger `wgengine: watchdog timeout on Reconfig`. Create an empty `bin/force-userspace` file to force userspace mode on those devices. The selected mode is recorded at the start of `tailscaled.log`.
 
 ### Loopback
 
@@ -27,8 +27,7 @@ On devices where the binary directory doesn't support `chmod` (FAT32), the plugi
 All scripts are POSIX sh (no bash). Accept the tailscale directory as `$1` or `$TS_DIR`, defaulting to `/mnt/us/tailscale`.
 
 - `install-tailscale.sh` — fetches latest stable version from pkgs.tailscale.com, falls back to pinned version
-- `start_tailscale.sh` — start daemon + connect (standard Tailscale)
-- `start_tailscale_headscale.sh` — start with `--login-server` for self-hosted Headscale
+- `start_tailscale.sh` — start daemon + connect (Tailscale or a configured Headscale server)
 - `stop_tailscale.sh` — disconnect and stop daemon
 - `uninstall-tailscale.sh` — stop and remove all Tailscale files
 

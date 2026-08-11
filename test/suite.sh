@@ -101,14 +101,21 @@ log ""
 log "─── capability checks (Lua equivalents) ───"
 
 # TUN detection
-if [ -c /dev/net/tun ]; then
+if [ -f "$BIN_DIR/force-userspace" ]; then
+    TUN_AVAILABLE="no"
+    NETWORK_MODE="userspace (forced)"
+    log "  force-userspace exists → userspace-networking selected"
+    pass "userspace override detected"
+elif [ -c /dev/net/tun ] && [ -r /dev/net/tun ] && [ -w /dev/net/tun ]; then
     TUN_AVAILABLE="yes"
-    log "  /dev/net/tun exists → kernel TUN available"
-    pass "TUN device detected"
+    NETWORK_MODE="kernel TUN"
+    log "  /dev/net/tun is usable → kernel TUN available"
+    pass "usable TUN device detected"
 else
     TUN_AVAILABLE="no"
-    log "  /dev/net/tun missing → will use userspace-networking"
-    pass "TUN device absent (userspace fallback)"
+    NETWORK_MODE="userspace (no usable /dev/net/tun)"
+    log "  /dev/net/tun unavailable or unusable → userspace-networking"
+    pass "TUN device unavailable (userspace fallback)"
 fi
 
 # Loopback check
@@ -241,7 +248,8 @@ else
         log "  starting daemon (TUN=$TUN_AVAILABLE state=$STATE_DIR)..."
         TS_BIN="$BIN_DIR" \
         TS_STATEDIR="$STATE_DIR" \
-        TS_TUN_FLAG="$([ "$TUN_AVAILABLE" = "yes" ] || echo '--tun=userspace-networking')" \
+        TS_TUN_FLAG="$([ "$TUN_AVAILABLE" = "yes" ] && echo '--tun=tailscale0' || echo '--tun=userspace-networking')" \
+        TS_NETWORK_MODE="$NETWORK_MODE" \
         TS_UP_FLAGS="--accept-routes --accept-dns=false --netfilter-mode=off" \
         sh "$BIN_DIR/start_tailscale.sh" > /tmp/tailscale-test/start.log 2>&1
         START_RC=$?
