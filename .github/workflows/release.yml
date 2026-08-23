@@ -30,6 +30,7 @@ jobs:
           mkdir -p /tmp/build/tailscale.koplugin
           rsync -a --exclude='.git' --exclude='*.zip' --exclude='CLAUDE.md' --exclude='test.sh' \
             --exclude='NOTES.md' --exclude='README.md' --exclude='LICENSE' --exclude='.github' \
+            --exclude='.claude' \
             . /tmp/build/tailscale.koplugin/
           cd /tmp/build
           zip -r "${ZIP}" tailscale.koplugin/
