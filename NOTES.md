@@ -12,7 +12,7 @@ Config files (`auth.key`, `headscale.url`) live alongside the binaries. Logs (`t
 
 Lua owns every decision. The relevant functions are `resolveStateDir`, `resolveTunFlag`, `readAuthKey`, `readHeadscaleUrl`, and `buildUpCommand`.
 
-The shell scripts are thin executors. They receive everything via `TS_*` environment variables: `TS_BIN`, `TS_STATEDIR`, `TS_TUN_FLAG`, `TS_NETWORK_MODE`, `TS_UP_FLAGS`, `TS_LOGIN_SERVER`, `TS_AUTH_KEY`. They make no decisions of their own.
+The shell scripts are thin executors. They receive everything via `TS_*` environment variables: `TS_BIN`, `TS_STATEDIR`, `TS_TUN_FLAG`, `TS_NETWORK_MODE`, `TS_UP_FLAGS`, `TS_LOGIN_SERVER`, `TS_AUTH_KEY`, and, for exit nodes, `USE_EXIT_NODE` and `EXIT_NODE`. They make no decisions of their own.
 
 There is no `start_tailscale_headscale.sh`. Headscale is selected by the presence of `headscale.url`.
 
@@ -58,7 +58,7 @@ If the device is killed without a clean stop, the node re-registers via `auth.ke
 
 ## SCRIPTS
 
-All scripts are POSIX sh (busybox). Each accepts the tailscale directory as `$1` or `$TS_DIR`. The default is `/mnt/us/tailscale`.
+All scripts are POSIX sh (busybox). Each defaults to its own directory and takes `TS_BIN` to override it.
 
 - `install-tailscale.sh` — fetches the stable version from pkgs.tailscale.com. It parses the `TarballsVersion` field from the JSON index and falls back to the pinned `TS_FALLBACK_VER`. It skips the install if the installed version matches.
 - `start_tailscale.sh` — stops old instances, starts `tailscaled`, and runs `tailscale up`.

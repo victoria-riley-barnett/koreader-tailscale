@@ -50,7 +50,7 @@ The selected mode is written as the first line of `bin/tailscaled.log`.
 
 To force userspace mode, create an empty file `bin/force-userspace` and restart Tailscale. Use this when the TUN driver is unstable. On certain Kobo devices, kernel TUN crashes the device with `wgengine: watchdog timeout on Reconfig`. The force-userspace file fixes it.
 
-In both modes the plugin listens for SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056`. In userspace mode, set KOReader's HTTP proxy to `http://127.0.0.1:1056` (Settings → Network → Proxy).
+In both modes the plugin listens for SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056`. In userspace mode, set KOReader's HTTP proxy to `http://127.0.0.1:1056` (Settings → Network → Proxy), or enable "Automatically configure HTTP proxy" in Settings / Config and the plugin does it on connect and restores it on disconnect.
 
 ## Files
 
@@ -93,6 +93,7 @@ This gives secure remote file synchronization without a shared network.
 - Status: show the device IP and info.
 - Install/Update Tailscale: download and install the binaries.
 - Uninstall Tailscale: stop and remove all Tailscale files. This removes the auth key.
+- Settings / Config: auth key, Headscale URL, exit node (set a node and enable it to route all traffic through it), and automatic HTTP proxy.
 
 ### Platform notes
 

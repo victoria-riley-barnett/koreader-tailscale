@@ -26,5 +26,6 @@ KOReader plugin that installs and manages Tailscale VPN on e-readers (Kindle, Ko
 - `test.sh` runs static checks on the host. Run it with `sh test.sh`.
 - `test/suite.sh` is an integration suite that runs on the device. `test/deploy.sh` pushes the plugin to a Kindle and runs the suite.
 - There is no unit test framework on device. Test by deploying to a device.
-- KOReader APIs used: `UIManager`, `InfoMessage`, `WidgetContainer`, `DataStorage`, `Dispatcher`, `logger`.
+- KOReader APIs used: `UIManager`, `InfoMessage`, `InputDialog`, `WidgetContainer`, `DataStorage`, `Dispatcher`, `LuaSettings`, `NetworkMgr` (HTTP proxy), `logger`.
+- Plugin settings (exit node, auto HTTP proxy) persist in `settings/tailscale.lua` via `LuaSettings`.
 - The `.zip` files in the repo root are release artifacts. They are gitignored.
