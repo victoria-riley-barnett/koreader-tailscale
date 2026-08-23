@@ -66,7 +66,7 @@ done
 if command -v luacheck >/dev/null 2>&1; then
     echo ""
     echo "--- luacheck ---"
-    if luacheck main.lua --no-unused --no-redefined --no-max-line-length --ignore 611 612 613 614 --globals require 2>&1 | grep -q 'OK'; then
+    if luacheck main.lua --no-unused --no-redefined --no-max-line-length --ignore 611 612 613 614 --globals require G_reader_settings 2>&1 | grep -q 'OK'; then
         pass "luacheck main.lua"
     else
         fail "luacheck main.lua"

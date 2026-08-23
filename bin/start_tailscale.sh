@@ -41,11 +41,18 @@ fi
 HOST_FLAG=""
 [ -n "$HOSTNAME" ] && HOST_FLAG="--hostname='$HOSTNAME'"
 
+quote_arg() {
+    printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
+}
+
 # Build tailscale up command:
 # Core flags from Lua, extras added here (so retry path can reconstruct cleanly)
 CMD="./tailscale up $TS_UP_FLAGS $HOST_FLAG"
 [ -n "$TS_AUTH_KEY" ] && CMD="$CMD --auth-key=\"$TS_AUTH_KEY\""
 [ -n "$TS_LOGIN_SERVER" ] && CMD="$CMD --login-server=\"$TS_LOGIN_SERVER\""
+if [ "${USE_EXIT_NODE:-0}" = "1" ] && [ -n "${EXIT_NODE:-}" ]; then
+    CMD="$CMD --exit-node=$(quote_arg "$EXIT_NODE") --exit-node-allow-lan-access"
+fi
 
 sh -c "$CMD" < /dev/null > tailscale.log 2>&1
 RC=$?
@@ -60,6 +67,9 @@ if [ $RC -ne 0 ]; then
         CMD="./tailscale up $TS_UP_FLAGS $HOST_FLAG"
         [ -n "$TS_AUTH_KEY" ] && CMD="$CMD --auth-key=\"$TS_AUTH_KEY\""
         [ -n "$TS_LOGIN_SERVER" ] && CMD="$CMD --login-server=\"$TS_LOGIN_SERVER\""
+        if [ "${USE_EXIT_NODE:-0}" = "1" ] && [ -n "${EXIT_NODE:-}" ]; then
+            CMD="$CMD --exit-node=$(quote_arg "$EXIT_NODE") --exit-node-allow-lan-access"
+        fi
         sh -c "$CMD" < /dev/null > tailscale.log 2>&1
         RC=$?
     fi

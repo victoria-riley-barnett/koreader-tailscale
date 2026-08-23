@@ -3,6 +3,8 @@ local Device = require("device")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local InfoMessage = require("ui/widget/infomessage")
+local InputDialog = require("ui/widget/inputdialog")
+local LuaSettings = require("luasettings")
 local logger = require("logger")
 local _ = require("gettext")
 local json = require("json")
@@ -11,6 +13,7 @@ local Dispatcher = require("dispatcher")
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
     is_doc_only = false,
+    http_proxy_url = "http://127.0.0.1:1056",
 }
 
 -- ─── platform detection ───────────────────────────────────────────
@@ -59,6 +62,12 @@ function TailscalePlugin:init()
     self.ts_arch = self:detectArch()
     self.ts_bin = self.ts_dir .. "/bin"
     logger.info("Tailscale: dir=" .. self.ts_dir .. " arch=" .. self.ts_arch)
+
+    self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/tailscale.lua")
+    self.settings:readSetting("use_exit_node", false)
+    self.settings:readSetting("exit_node", "")
+    self.settings:readSetting("auto_http_proxy", false)
+    self.settings:readSetting("http_proxy_backup_active", false)
 
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
@@ -297,27 +306,48 @@ end
 
 -- ─── thin shell executors ─────────────────────────────────────────
 
+function TailscalePlugin:flushSettings()
+    if self.settings then
+        self.settings:flush()
+    end
+end
+
+function TailscalePlugin:shellQuote(value)
+    value = tostring(value or "")
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
+function TailscalePlugin:getStartEnvironment(state_dir)
+    -- All decisions are made here in Lua and passed to the shell via env vars.
+    local env = "TS_BIN=" .. self:shellQuote(self.ts_bin)
+        .. " TS_STATEDIR=" .. self:shellQuote(state_dir)
+        .. " TS_TUN_FLAG=" .. self:shellQuote(self._tun_flag or "")
+        .. " TS_NETWORK_MODE=" .. self:shellQuote(self._network_mode or "unknown")
+        .. " TS_UP_FLAGS=" .. self:shellQuote(self._up_flags or "")
+        .. " TS_DIR=" .. self:shellQuote(self.ts_dir)
+    if self._up_headscale_url then
+        env = env .. " TS_LOGIN_SERVER=" .. self:shellQuote(self._up_headscale_url)
+    end
+    if self._up_auth_key then
+        env = env .. " TS_AUTH_KEY=" .. self:shellQuote(self._up_auth_key)
+    end
+    if self.settings and self.settings:readSetting("use_exit_node") then
+        local exit_node = (self.settings:readSetting("exit_node") or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if exit_node ~= "" then
+            env = env .. " USE_EXIT_NODE=1 EXIT_NODE=" .. self:shellQuote(exit_node)
+        end
+    end
+    return env
+end
+
 function TailscalePlugin:execStartScript()
     -- Shell script is a dumb executor — all decisions are already made.
-    -- We pass everything through environment variables.
     local state_dir = self:resolveStateDir()
     self:ensureLoopback()
     self:resolveTunFlag()
     self:buildUpCommand()
 
-    local env = "TS_BIN='" .. self.ts_bin .. "'"
-        .. " TS_STATEDIR='" .. state_dir .. "'"
-        .. " TS_TUN_FLAG='" .. (self._tun_flag or "") .. "'"
-        .. " TS_NETWORK_MODE='" .. (self._network_mode or "unknown") .. "'"
-        .. " TS_UP_FLAGS='" .. (self._up_flags or "") .. "'"
-        .. " TS_DIR='" .. self.ts_dir .. "'"
-    if self._up_headscale_url then
-        env = env .. " TS_LOGIN_SERVER='" .. self._up_headscale_url .. "'"
-    end
-    if self._up_auth_key then
-        env = env .. " TS_AUTH_KEY='" .. self._up_auth_key .. "'"
-    end
-
+    local env = self:getStartEnvironment(state_dir)
     local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
     return ok == true and code == 0
 end
@@ -336,6 +366,94 @@ function TailscalePlugin:execUninstallScript()
     os.execute("TS_BIN='" .. self.ts_bin .. "' sh '" .. self.plugin_dir .. "/bin/uninstall-tailscale.sh'")
 end
 
+-- ─── HTTP proxy management ────────────────────────────────────────
+
+function TailscalePlugin:getNetworkManager()
+    local ok, network_mgr = pcall(require, "ui/network/manager")
+    if ok then
+        return network_mgr
+    end
+    logger.warn("Tailscale plugin: failed to load NetworkMgr for HTTP proxy management")
+    return nil
+end
+
+function TailscalePlugin:saveHTTPProxyBackup()
+    if self.settings:readSetting("http_proxy_backup_active") then
+        return
+    end
+
+    self.settings:saveSetting("http_proxy_backup_enabled", G_reader_settings:readSetting("http_proxy_enabled") and true or false)
+    self.settings:saveSetting("http_proxy_backup_value", G_reader_settings:readSetting("http_proxy") or "")
+    self.settings:saveSetting("http_proxy_backup_active", true)
+    self:flushSettings()
+end
+
+function TailscalePlugin:enableHTTPProxyIfNeeded()
+    if not self.settings:readSetting("auto_http_proxy") then
+        return
+    end
+
+    local network_mgr = self:getNetworkManager()
+    if not network_mgr or not network_mgr.setHTTPProxy then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
+            timeout = 5
+        })
+        return
+    end
+
+    self:saveHTTPProxyBackup()
+    local ok = pcall(function()
+        network_mgr:setHTTPProxy(self.http_proxy_url)
+    end)
+    if not ok then
+        self:restoreHTTPProxyBackup(true)
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
+            timeout = 5
+        })
+    end
+end
+
+function TailscalePlugin:restoreHTTPProxyBackup(silent)
+    if not self.settings:readSetting("http_proxy_backup_active") then
+        return
+    end
+
+    local network_mgr = self:getNetworkManager()
+    if not network_mgr or not network_mgr.setHTTPProxy then
+        if not silent then
+            UIManager:show(InfoMessage:new{
+                text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
+                timeout = 5
+            })
+        end
+        return
+    end
+
+    local backup_enabled = self.settings:readSetting("http_proxy_backup_enabled")
+    local backup_value = self.settings:readSetting("http_proxy_backup_value") or ""
+    local ok = pcall(function()
+        if backup_enabled and backup_value ~= "" then
+            network_mgr:setHTTPProxy(backup_value)
+        else
+            network_mgr:setHTTPProxy(nil)
+        end
+    end)
+
+    if ok then
+        self.settings:saveSetting("http_proxy_backup_active", false)
+        self.settings:delSetting("http_proxy_backup_enabled")
+        self.settings:delSetting("http_proxy_backup_value")
+        self:flushSettings()
+    elseif not silent then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
+            timeout = 5
+        })
+    end
+end
+
 -- ─── user-facing actions ──────────────────────────────────────────
 
 function TailscalePlugin:onToggleTailscale(callback)
@@ -347,7 +465,9 @@ function TailscalePlugin:onToggleTailscale(callback)
     if callback then callback() end
 end
 
-function TailscalePlugin:onFlushSettings() end
+function TailscalePlugin:onFlushSettings()
+    self:flushSettings()
+end
 
 function TailscalePlugin:addToMainMenu(menu_items)
     menu_items.tailscale = {
@@ -373,6 +493,46 @@ function TailscalePlugin:addToMainMenu(menu_items)
                 sub_item_table = {
                     { text = _("Configure Auth Key"), callback = function() self:configureAuthKey() end },
                     { text = _("Headscale URL info"), callback = function() self:configureHeadscale() end },
+                    {
+                        text = _("Enable exit node"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self.settings and self.settings:readSetting("use_exit_node")
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("use_exit_node", not self.settings:readSetting("use_exit_node"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text_func = function()
+                            local exit_node = self.settings and self.settings:readSetting("exit_node") or ""
+                            if exit_node and exit_node ~= "" then
+                                return _("Exit node") .. ": " .. exit_node
+                            end
+                            return _("Exit node")
+                        end,
+                        callback = function()
+                            self:configureExitNode()
+                        end
+                    },
+                    {
+                        text = _("Automatically configure HTTP proxy"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self.settings and self.settings:readSetting("auto_http_proxy")
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("auto_http_proxy", not self.settings:readSetting("auto_http_proxy"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
                     { text = _("Uninstall Tailscale"), callback = function() self:uninstallTailscale() end },
                 }
             }
@@ -475,6 +635,7 @@ function TailscalePlugin:connectTailscale()
 
     UIManager:close(starting_msg)
     if ok then
+        self:enableHTTPProxyIfNeeded()
         UIManager:show(InfoMessage:new{
             text = _("Tailscale started\nCheck " .. self:getLogPath() .. " for status"),
             timeout = 4,
@@ -489,6 +650,7 @@ end
 
 function TailscalePlugin:disconnectTailscale()
     self:execStopScript()
+    self:restoreHTTPProxyBackup()
     UIManager:show(InfoMessage:new{ text = _("Tailscale disconnected"), timeout = 2 })
 end
 
@@ -590,6 +752,45 @@ function TailscalePlugin:configureHeadscale()
             timeout = 8,
         })
     end
+end
+
+function TailscalePlugin:configureExitNode()
+    local exit_node = self.settings and self.settings:readSetting("exit_node") or ""
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Exit node"),
+        input = exit_node or "",
+        input_hint = _("Hostname, MagicDNS name, or Tailscale IP"),
+        description = _("Route traffic through this Tailscale exit node when enabled."),
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    id = "close",
+                    callback = function()
+                        UIManager:close(dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    is_enter_default = true,
+                    callback = function()
+                        local value = dialog:getInputText() or ""
+                        value = value:gsub("^%s+", ""):gsub("%s+$", "")
+                        self.settings:saveSetting("exit_node", value)
+                        self:flushSettings()
+                        UIManager:close(dialog)
+                        UIManager:show(InfoMessage:new{
+                            text = _("Exit node saved. Restart Tailscale to apply."),
+                            timeout = 3
+                        })
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
 end
 
 function TailscalePlugin:uninstallTailscale()
