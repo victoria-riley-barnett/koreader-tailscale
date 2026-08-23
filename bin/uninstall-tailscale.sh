@@ -18,7 +18,7 @@ if [ -d "$BIN_DIR" ]; then
     rm -f tailscale-* 2>/dev/null || true
 fi
 
-# Clean up tmp state
-rm -f /tmp/tailscale*.log /tmp/tailscale*.state 2>/dev/null || true
+# Clean up tmp state (state dir, logs, tmpfs binary copies)
+rm -rf /tmp/tailscale 2>/dev/null || true
 
 exit 0
