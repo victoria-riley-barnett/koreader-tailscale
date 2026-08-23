@@ -28,9 +28,28 @@ function TailscalePlugin:detectArch()
     return "arm"
 end
 
+-- Derive the plugin dir from this module's own path. The DataStorage
+-- default is wrong when KOReader loads plugins via extra_plugin_paths
+-- (reMarkable), which is why we probe instead of assuming (#35).
+function TailscalePlugin:detectPluginDir()
+    local src = debug.getinfo(1, "S").source or ""
+    local dir = src:gsub("^@", ""):gsub("/main%.lua$", "")
+    if dir:sub(1, 1) ~= "/" then
+        -- Loader used a relative path; anchor it to the data dir.
+        dir = DataStorage:getFullDataDir() .. "/" .. dir
+    end
+    local probe = io.open(dir .. "/bin/start_tailscale.sh", "r")
+    if probe then
+        probe:close()
+        return dir
+    end
+    -- Fall back to the standard location if the derived dir has no scripts.
+    return DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
+end
+
 function TailscalePlugin:init()
     logger.info("Tailscale plugin initializing")
-    self.plugin_dir = DataStorage:getFullDataDir() .. "/plugins/tailscale.koplugin"
+    self.plugin_dir = self:detectPluginDir()
 
     if Device:isPocketBook() then
         self.ts_dir = "/mnt/ext1/tailscale"
