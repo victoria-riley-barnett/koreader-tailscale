@@ -1,196 +1,157 @@
 # Tailscale Plugin for KOReader
 
+## Description
+
 Run Tailscale on your e-reader. Tested on Kindle PW5/PW6, Kobo, and PocketBook. Should work on any KOReader device with ARMv7 or ARM64.
 
 Pairs well with [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing) for file sync over your tailnet.
 
 ## Prerequisites
 
-1. **Tailscale Account**: Sign up at [tailscale.com](https://tailscale.com).
-2. **Auth Key**: Create a reusable auth key at [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
-3. **E-reader with file and/or SSH access**: With KOReader installed. Tested on Kindle PW6 and PW5, and PocketBook devices. Should work on any device running ARMv7 or ARM64 binaries.
+1. A Tailscale account. Sign up at [tailscale.com](https://tailscale.com).
+2. A reusable auth key. Create it at the [Tailscale Admin Console](https://login.tailscale.com/admin/settings/keys).
+3. An e-reader with file or SSH access. KOReader must be installed.
 
 ## Installation
 
-1. Copy `tailscale.koplugin` to your KOReader plugins directory:
-   - **Kindle**: `/mnt/us/koreader/plugins/`
-   - **Kobo**: `/mnt/onboard/.adds/koreader/plugins/`
-   - **PocketBook**: `/mnt/ext1/koreader/plugins/`
+1. Copy `tailscale.koplugin` to the KOReader plugins directory.
+   - Kindle: `/mnt/us/koreader/plugins/`
+   - Kobo: `/mnt/onboard/.adds/koreader/plugins/`
+   - PocketBook: `/mnt/ext1/koreader/plugins/`
 2. Restart KOReader.
-3. In KOReader: Menu → Plugins → Tailscale VPN → Install/Update Tailscale.
+3. Open Network → Tailscale VPN and select Install/Update Tailscale. In reader mode, open the gear icon and select Settings → Network → Tailscale VPN.
 
-**Note**: Installation downloads ~57 MB. You can pre-download binaries and transfer via SCP/SSH to the plugin's `bin/` directory (default location depends on device).
+Installation downloads 25 to 57 MB. Do not close KOReader during installation.
+
+To skip the download, transfer the binaries to the plugin `bin/` directory over SCP/SSH. See Manual Installation.
 
 ## Setup
 
-1. **Configure Auth Key**:
-   Copy the auth.key file to the Tailscale `bin/` directory. Default locations:
-   - **Kindle**: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key`
-   - **Kobo**: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key`
-   - **PocketBook**: `/mnt/ext1/tailscale/bin/auth.key` (external storage)
+1. Save the auth key. Copy the reusable auth key to `bin/auth.key`. Default locations:
+   - Kindle: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key`
+   - Kobo: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key`
+   - PocketBook: `/mnt/ext1/tailscale/bin/auth.key` (external storage)
+
    ```sh
-   # Kindle default
    scp -P 2222 auth.key user@kindle-ip:/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key
-   # Kobo plugin directory (typical location)
    scp -P 2222 auth.key user@kobo-ip:/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key
-   # PocketBook external storage
    scp -P 2222 auth.key user@pocketbook-ip:/mnt/ext1/tailscale/bin/auth.key
    ```
 
-2. **(Optional) Use a self-hosted Headscale server**:
-   If you run Headscale and want your device to use it instead of tailscale.com, create a file `headscale.url` in the Tailscale `bin/` directory. Default locations:
-   - **Kindle**: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/headscale.url`
-   - **Kobo**: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/headscale.url`
-   - **PocketBook**: `/mnt/ext1/tailscale/bin/headscale.url` (external storage)
-   The plugin exposes a menu item *Headscale URL info* which shows the currently configured URL and instructions for updating it.
+2. Optional: use a self-hosted Headscale server. Create `headscale.url` in the bin directory and write the server URL to it. Default locations match the auth.key locations above. Headscale auth keys may start with `hskey-auth-`. The menu item "Headscale URL info" shows the configured URL and how to update it.
 
-3. Menu → Network → Tailscale VPN → toggle **On**.
+3. Enable the connection. Open Network → Tailscale VPN and toggle On.
 
-## Networking mode and proxy
+## Networking
 
-The plugin prefers kernel TUN networking when `/dev/net/tun` is a readable and writable character device. This gives KOReader transparent tailnet routing for integrations such as OPDS, progress sync, and Home Assistant. If no usable TUN device exists, it falls back to `--tun=userspace-networking`.
+The plugin uses kernel TUN when `/dev/net/tun` is a readable and writable character device. Kernel mode gives KOReader transparent tailnet routing for OPDS, progress sync, and Home Assistant. Without a usable TUN device, the plugin uses `--tun=userspace-networking`.
 
-The selected mode is written as the first line of `bin/tailscaled.log`. If a device exposes TUN but its driver is unstable, create an empty `bin/force-userspace` file and restart Tailscale to force the userspace fallback.
+The selected mode is written as the first line of `bin/tailscaled.log`.
 
-In either mode, the plugin runs SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056` for clients that explicitly use a proxy.
+To force userspace mode, create an empty file `bin/force-userspace` and restart Tailscale. Use this when the TUN driver is unstable. On certain Kobo devices, kernel TUN crashes the device with `wgengine: watchdog timeout on Reconfig`. The force-userspace file fixes it.
 
-### Chmod Note
+In both modes the plugin listens for SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056`. In userspace mode, set KOReader's HTTP proxy to `http://127.0.0.1:1056` (Settings → Network → Proxy).
 
-To make the scripts executable on the device, navigate to the Tailscale `bin/` directory and run `chmod +x`:
+## Files
+
+Binaries, configuration, and logs live in the bin directory. The location depends on the device.
+
+- Kindle: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/`
+- Kobo: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/`
+- PocketBook: `/mnt/ext1/tailscale/bin/` (external storage)
+
+PocketBook uses external storage because the plugin directory may be on a read-only filesystem. Logs (`tailscale.log`, `tailscaled.log`) and configuration (`auth.key`, `headscale.url`) are stored in the same directory.
+
+Make the scripts executable on the device:
 
 ```sh
-# Default Kindle location
 cd /mnt/us/koreader/plugins/tailscale.koplugin/bin
-chmod +x start_tailscale.sh
-
-# Kobo plugin directory (typical location)
-cd /mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin
-chmod +x start_tailscale.sh
-
-# PocketBook plugin directory
-cd /mnt/ext1/koreader/plugins/tailscale.koplugin/bin
 chmod +x start_tailscale.sh
 ```
 
-## Installation Location
+The Kobo and PocketBook locations follow the list above.
 
-Tailscale binaries are installed in the plugin's `bin/` directory for Kindle and Kobo devices. For PocketBook devices, binaries are installed in external storage (`/mnt/ext1/tailscale/bin`) to avoid read-only filesystem limitations.
+Installation needs space for the download. Check free space with `df -h /mnt/us /mnt/onboard /mnt` and keep at least 100 MB free. If space is short, move KOReader to another partition or use Manual Installation.
 
-### Troubleshooting Space Issues
+## Usage
 
-If installation fails due to insufficient space:
+### Syncthing
 
-1. **Check available space** on the partition containing KOReader:
-   ```bash
-   df -h /mnt/us /mnt/onboard /mnt
-   ```
-
-2. Ensure at least 100MB free space is available.
-
-3. If space is limited, consider moving KOReader to a different partition or using manual installation (see Manual Installation section).
-
-## Usage with Syncthing
-
-1. Note your Kindle's Tailscale IP from the status menu.
+1. Read the device's Tailscale IP from the plugin status menu.
 2. Install Tailscale and Syncthing on other devices.
-3. Configure Syncthing to use the Tailscale IP by adding the address:
+3. Add the Tailscale address to Syncthing.
+
    ```
    tcp://<tailscale-ip or magic dns>:22000
    ```
-4. Enjoy secure, remote file synchronization without having to be on the same network.
 
-## Plugin Menu Commands
+This gives secure remote file synchronization without a shared network.
 
-- **Tailscale VPN**: Toggle connection.
-- **Status**: Show device IP and info.
-- **Install/Update Tailscale**: Download and install binaries.
-- **Uninstall Tailscale**: Stop and remove Tailscale files (removes auth key).
+### Commands
 
-## Files Location
+- Tailscale VPN: toggle the connection.
+- Status: show the device IP and info.
+- Install/Update Tailscale: download and install the binaries.
+- Uninstall Tailscale: stop and remove all Tailscale files. This removes the auth key.
 
-Files are located in the Tailscale `bin/` directory, which depends on the device:
+### Platform notes
 
-- **Kindle**: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/`
-- **Kobo**: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/`
-- **PocketBook**: `/mnt/ext1/tailscale/bin/` (external storage)
+- Loopback: some firmware (Kobo, PocketBook) does not configure `lo` at boot. The plugin brings it up before starting the daemon. The SOCKS5 and HTTP proxy listeners need loopback to bind.
+- FAT32: on devices with a FAT32 filesystem, state lives in `/tmp/tailscale` (tmpfs). The plugin copies it in at start and syncs it back to `bin/` on stop. Identity survives reboots because the node re-registers with `auth.key`.
+- USB mass storage: tailscaled stops before KOReader enters USB storage mode and restarts after. If the device crashes mid-session, the node re-registers via `auth.key`.
 
-Logs (`tailscale.log`, `tailscaled.log`) and configuration files (`auth.key`, `headscale.url`) are stored in the same directory.
+## Uninstall
 
-## Uninstall / Reinstall
+Open Network → Tailscale VPN and select Uninstall Tailscale. Reinstall with Install/Update Tailscale.
 
-1. **Uninstall**: Menu → Plugins → Tailscale VPN → Uninstall Tailscale.
-2. **Reinstall**: Menu → Plugins → Tailscale VPN → Install/Update Tailscale.
-
-You may want to backup your auth.key file (located in the plugin's `bin/` directory) by moving it to `auth.key.backup` or similar before uninstalling, and restore its name after reinstalling.
+Back up the auth key before uninstalling. Move `bin/auth.key` to `auth.key.backup` and restore the name after reinstalling.
 
 ## Manual Installation
 
-If the automatic installation fails, you can install Tailscale manually:
+If the automatic installation fails, install the binaries by hand. The examples use the Kindle path. Replace it with your plugin path.
 
-**Note**: Binaries are installed in the plugin's `bin/` directory. Replace `/mnt/us/koreader/plugins/tailscale.koplugin/bin/` with your actual plugin path if different.
+1. Download the binaries for the device architecture (ARMv7/ARMv8/ARM64).
 
-**Migration**: If you previously used an external directory (e.g., `/mnt/us/tailscale`), move your existing binaries to the plugin's `bin/` directory.
+   ```sh
+   wget https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm.tgz
+   # or
+   curl -O https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm.tgz
+   ```
 
-### 1. Download Tailscale Binaries
+2. Transfer the archive to the device.
 
-Download the appropriate binaries for your device architecture (ARMv7/ARMv8/ARM64):
+   ```sh
+   scp -P 2222 tailscale_1.94.2_arm.tgz root@<device-ip>:/mnt/us/koreader/plugins/tailscale.koplugin/bin/
+   ```
 
-```bash
-# On your computer
-wget https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm.tgz
-# or
-curl -O https://pkgs.tailscale.com/stable/tailscale_1.94.2_arm.tgz
-```
+3. Extract and install on the device.
 
-### 2. Transfer to Your Device
+   ```sh
+   cd /mnt/us/koreader/plugins/tailscale.koplugin/bin
+   tar xzf tailscale_1.94.2_arm.tgz
+   mv tailscale_*/tailscale tailscale_*/tailscaled ./
+   rm -rf tailscale_* tailscale_1.94.2_arm.tgz
+   chmod +x tailscale tailscaled
+   touch auth.key
+   ```
 
-Copy the archive to your e-reader:
+4. Write the auth key.
 
-```bash
-# For Kindle (SSH on port 2222)
-scp -P 2222 tailscale_1.94.2_arm.tgz root@<device-ip>:/mnt/us/koreader/plugins/tailscale.koplugin/bin/
+   ```sh
+   echo "tskey-..." > auth.key
+   ```
 
-# For Kobo (plugin directory)
-scp tailscale_1.94.2_arm.tgz root@<device-ip>:/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/
-```
+5. Start Tailscale from the plugin menu.
 
-### 3. Extract and Install
-
-SSH into your device and run:
-
-```bash
-# Navigate to the bin directory
-cd /mnt/us/koreader/plugins/tailscale.koplugin/bin  # or /mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin for Kobo
-
-# Extract
-tar xzf tailscale_1.94.2_arm.tgz
-
-# Move binaries
-mv tailscale_*/tailscale tailscale_*/tailscaled ./
-rm -rf tailscale_* tailscale_1.94.2_arm.tgz
-
-# Make executable
-chmod +x tailscale tailscaled
-
-# Create empty auth.key file if it doesn't exist
-touch auth.key
-```
-
-### 4. Configure Auth Key
-
-Create `auth.key` with your Tailscale auth key:
-
-```bash
-echo "tskey-..." > /mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key  # or /mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key
-```
-
-### 5. Start Tailscale
-
-Return to KOReader and use the plugin menu to start Tailscale.
+If you previously kept binaries outside the plugin directory (for example `/mnt/us/tailscale`), move them into the plugin `bin/` directory.
 
 ## Troubleshooting
 
-Check `bin/tailscaled.log` and `bin/tailscale.log` in the plugin directory. See [NOTES.md](NOTES.md) for internals and manual installation.
+- No network: the plugin will not start while the device has no network. It shows an airplane mode message. Enable the network first.
+- Logs: check `bin/tailscaled.log` and `bin/tailscale.log` in the plugin directory. The networking mode is the first line of `tailscaled.log`.
+- Status: use the plugin status menu to see device info.
+
+See [NOTES.md](NOTES.md) for internals.
 
 ## Credits
 
