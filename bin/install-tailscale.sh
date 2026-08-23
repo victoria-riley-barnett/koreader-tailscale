@@ -3,7 +3,7 @@
 
 set -e
 
-TS_FALLBACK_VER="1.96.2"
+TS_FALLBACK_VER="1.102.3"
 BIN_DIR="${TS_BIN:-$(cd "$(dirname "$0")" && pwd)}"
 ARCH="${TS_ARCH:-arm}"
 
@@ -18,7 +18,9 @@ if [ -z "$_json" ]; then
     _json=$(curl -sf "https://pkgs.tailscale.com/stable/?mode=json" 2>/dev/null)
 fi
 if [ -n "$_json" ]; then
-    TS_VER=$(printf '%s' "$_json" | grep -o '"version":"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*')
+    TS_VER=$(printf '%s\n' "$_json" \
+        | sed -n 's/.*"TarballsVersion"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' \
+        | head -n 1)
 fi
 [ -z "$TS_VER" ] && TS_VER="$TS_FALLBACK_VER"
 set -e
