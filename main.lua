@@ -257,7 +257,8 @@ function TailscalePlugin:execStartScript()
         env = env .. " TS_AUTH_KEY='" .. self._up_auth_key .. "'"
     end
 
-    os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
+    local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
+    return ok == true and code == 0
 end
 
 function TailscalePlugin:execStopScript()
@@ -372,9 +373,9 @@ function TailscalePlugin:runInstallation()
         local daemon_running = self:isRunning()
         local msg = _("Installation complete!")
         if daemon_running then
-            msg = msg .. _("\nDaemon auto-started.")
+            msg = msg .. _("\nTailscale auto-started.")
         else
-            msg = msg .. _("\nAdd Auth Key + Start daemon to connect.")
+            msg = msg .. _("\nAdd an auth key, then toggle Tailscale on to connect.")
         end
         UIManager:show(InfoMessage:new{ text = msg, timeout = 6 })
     else
@@ -422,11 +423,18 @@ function TailscalePlugin:connectTailscale()
         })
         return
     end
-    self:execStartScript()
-    UIManager:show(InfoMessage:new{
-        text = _("Tailscale started\nCheck " .. self:getLogPath() .. " for status"),
-        timeout = 4,
-    })
+    local ok = self:execStartScript()
+    if ok then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale started\nCheck " .. self:getLogPath() .. " for status"),
+            timeout = 4,
+        })
+    else
+        UIManager:show(InfoMessage:new{
+            text = _("Failed to start Tailscale.\nCheck " .. self:getLogPath() .. " for the error."),
+            timeout = 6,
+        })
+    end
 end
 
 function TailscalePlugin:disconnectTailscale()
@@ -446,7 +454,7 @@ function TailscalePlugin:showStatus()
     end
 
     local lines = {}
-    table.insert(lines, self:isRunning() and "Daemon: Running" or "Daemon: Not running")
+    table.insert(lines, self:isRunning() and "Tailscale: Running" or "Tailscale: Not running")
 
     local h = io.popen("'" .. self.ts_bin .. "/tailscale' status --json 2>/dev/null")
     if not h then
