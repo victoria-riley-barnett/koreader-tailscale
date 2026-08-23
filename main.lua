@@ -180,8 +180,8 @@ function TailscalePlugin:readAuthKey()
     local f = io.open(self:getAuthKeyPath(), "r")
     if not f then return nil end
     -- Scan lines for a valid key, skipping comments and blank lines
-    for line in f:lines() do
-        line = line:gsub("^%s+", ""):gsub("%s+$", "")
+    for raw_line in f:lines() do
+        local line = raw_line:gsub("^%s+", ""):gsub("%s+$", "")
         -- Skip comment lines (#) and blanks
         if line ~= "" and not line:match("^#") then
             -- Accept Tailscale (tskey-) and Headscale (hskey-auth-) formats
