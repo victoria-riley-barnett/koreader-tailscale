@@ -19,6 +19,33 @@ echo "--- version checks ---"
 [ -n "$META_VER" ] && pass "meta version: $META_VER" || fail "could not parse _meta.lua version"
 [ -n "$INSTALL_VER" ] && pass "install script pins tailscale: $INSTALL_VER" || fail "could not parse TS_VER from install script"
 
+# Matching the installed version proves parsing worked; fake downloads fail.
+VERSION_TEST_DIR=$(mktemp -d)
+mkdir -p "$VERSION_TEST_DIR/bin" "$VERSION_TEST_DIR/tools"
+cat > "$VERSION_TEST_DIR/tools/fetch" <<'EOF'
+#!/bin/sh
+case "$*" in
+    *'?mode=json'*) printf '%s\n' '{' '  "TarballsVersion": "9.8.7"' '}' ;;
+    *) exit 1 ;;
+esac
+EOF
+cat > "$VERSION_TEST_DIR/bin/tailscale" <<'EOF'
+#!/bin/sh
+echo '9.8.7'
+EOF
+cp "$VERSION_TEST_DIR/bin/tailscale" "$VERSION_TEST_DIR/bin/tailscaled"
+chmod +x "$VERSION_TEST_DIR/tools/fetch" "$VERSION_TEST_DIR"/bin/*
+for tool in wget curl busybox; do
+    ln -s fetch "$VERSION_TEST_DIR/tools/$tool"
+done
+if PATH="$VERSION_TEST_DIR/tools:$PATH" TS_BIN="$VERSION_TEST_DIR/bin" \
+        TS_ARCH=arm sh bin/install-tailscale.sh; then
+    pass "installer parses TarballsVersion"
+else
+    fail "installer could not parse TarballsVersion"
+fi
+rm -rf "$VERSION_TEST_DIR"
+
 # --- Lua syntax ---
 echo ""
 echo "--- lua syntax ---"
