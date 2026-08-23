@@ -46,9 +46,13 @@ Pairs well with [koreader-syncthing](https://github.com/jasonchoimtt/koreader-sy
 
 3. Menu → Network → Tailscale VPN → toggle **On**.
 
-## Proxy
+## Networking mode and proxy
 
-The plugin runs SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056` so KOReader can reach tailnet services (OPDS, sync, etc.).
+The plugin prefers kernel TUN networking when `/dev/net/tun` is a readable and writable character device. This gives KOReader transparent tailnet routing for integrations such as OPDS, progress sync, and Home Assistant. If no usable TUN device exists, it falls back to `--tun=userspace-networking`.
+
+The selected mode is written as the first line of `bin/tailscaled.log`. If a device exposes TUN but its driver is unstable, create an empty `bin/force-userspace` file and restart Tailscale to force the userspace fallback.
+
+In either mode, the plugin runs SOCKS5 on `127.0.0.1:1055` and HTTP CONNECT on `127.0.0.1:1056` for clients that explicitly use a proxy.
 
 ### Chmod Note
 

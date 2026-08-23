@@ -118,21 +118,29 @@ for f in bin/*.sh; do
     fi
 done
 
-# --- TUN fallback in start scripts ---
+# --- TUN detection and fallback ---
 echo ""
 echo "--- feature checks ---"
-for f in bin/start_tailscale.sh bin/start_tailscale_headscale.sh; do
-    if grep -q 'userspace-networking' "$f"; then
-        pass "$f has userspace-networking fallback"
-    else
-        fail "$f missing userspace-networking fallback"
-    fi
-    if grep -q 'socks5-server' "$f"; then
-        pass "$f has SOCKS5 proxy"
-    else
-        fail "$f missing SOCKS5 proxy"
-    fi
-done
+if grep -q -- '--tun=tailscale0' main.lua && grep -q -- '--tun=userspace-networking' main.lua; then
+    pass "main.lua selects kernel TUN with userspace fallback"
+else
+    fail "main.lua missing TUN selection or userspace fallback"
+fi
+if grep -q 'force-userspace' main.lua; then
+    pass "main.lua supports force-userspace override"
+else
+    fail "main.lua missing force-userspace override"
+fi
+if grep -q 'TS_NETWORK_MODE' bin/start_tailscale.sh; then
+    pass "start_tailscale.sh logs selected networking mode"
+else
+    fail "start_tailscale.sh missing networking mode logging"
+fi
+if grep -q 'socks5-server' bin/start_tailscale.sh; then
+    pass "start_tailscale.sh has SOCKS5 proxy"
+else
+    fail "start_tailscale.sh missing SOCKS5 proxy"
+fi
 
 # --- Summary ---
 echo ""
