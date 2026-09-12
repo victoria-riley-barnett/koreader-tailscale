@@ -141,6 +141,12 @@ if grep -q 'socks5-server' bin/start_tailscale.sh; then
 else
     fail "start_tailscale.sh missing SOCKS5 proxy"
 fi
+if grep -q 'tailscaled.state tailscaled.log.conf' bin/start_tailscale.sh \
+        && grep -q '"\$STATEDIR" != "\$BIN_DIR"' bin/start_tailscale.sh; then
+    pass "start_tailscale.sh persists tmpfs state after a successful startup"
+else
+    fail "start_tailscale.sh missing tmpfs state persistence"
+fi
 
 # --- Summary ---
 echo ""
