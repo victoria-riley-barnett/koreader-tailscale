@@ -75,4 +75,13 @@ if [ $RC -ne 0 ]; then
     fi
 fi
 
+# Persist state created in tmpfs so one-time auth keys are only needed for the
+# initial enrollment. This is needed on devices whose persistent storage cannot
+# satisfy tailscaled's chmod requirements.
+if [ "$RC" -eq 0 ] && [ "$STATEDIR" != "$BIN_DIR" ]; then
+    for f in tailscaled.state tailscaled.log.conf; do
+        [ -f "$STATEDIR/$f" ] && cp -f "$STATEDIR/$f" "$BIN_DIR/$f" 2>/dev/null || true
+    done
+fi
+
 exit $RC
