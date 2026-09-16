@@ -28,9 +28,13 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           ZIP="tailscale.koplugin-${TAG}.zip"
           mkdir -p /tmp/build/tailscale.koplugin
-          rsync -a --exclude='.git' --exclude='*.zip' --exclude='CLAUDE.md' --exclude='test.sh' \
-            --exclude='NOTES.md' --exclude='README.md' --exclude='LICENSE' --exclude='.github' \
-            --exclude='.claude' \
+          # Ship only the plugin: main.lua, _meta.lua, bin/. Keep in sync with
+          # the payload list in deploy.sh.
+          rsync -a \
+            --exclude='.git' --exclude='.claude' --exclude='.github' \
+            --exclude='test.sh' --exclude='deploy.sh' \
+            --exclude='*.md' --exclude='*.zip' --exclude='LICENSE' \
+            --exclude='.gitignore' \
             . /tmp/build/tailscale.koplugin/
           cd /tmp/build
           zip -r "${ZIP}" tailscale.koplugin/
