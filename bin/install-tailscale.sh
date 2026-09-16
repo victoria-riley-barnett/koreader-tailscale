@@ -35,8 +35,7 @@ ARCHIVE="tailscale_${ARCH}.tgz"
 rm -f "$ARCHIVE" 2>/dev/null || true
 
 wget -q -O "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${ARCH}.tgz" 2>/dev/null || \
-curl -s -o "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${ARCH}.tgz" 2>/dev/null || \
-busybox wget -q -O "$ARCHIVE" "http://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${ARCH}.tgz" 2>/dev/null || true
+curl -s -o "$ARCHIVE" "https://pkgs.tailscale.com/stable/tailscale_${TS_VER}_${ARCH}.tgz" 2>/dev/null || true
 
 [ -s "$ARCHIVE" ] || exit 1
 
@@ -45,5 +44,8 @@ rm -f "$ARCHIVE"
 mv -f tailscale_*/tailscale tailscale_*/tailscaled ./ 2>/dev/null || true
 rm -rf tailscale_* 2>/dev/null || true
 chmod +x ./tailscale ./tailscaled 2>/dev/null || true
-[ -f auth.key ] || : > auth.key
+if [ ! -f ./tailscale ] || [ ! -x ./tailscale ] || [ ! -f ./tailscaled ] || [ ! -x ./tailscaled ]; then
+    echo "install-tailscale: tailscale/tailscaled missing or not executable after extraction" >&2
+    exit 1
+fi
 exit 0

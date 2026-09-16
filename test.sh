@@ -126,10 +126,16 @@ if grep -q -- '--tun=tailscale0' main.lua && grep -q -- '--tun=userspace-network
 else
     fail "main.lua missing TUN selection or userspace fallback"
 fi
-if grep -q 'force-userspace' main.lua; then
-    pass "main.lua supports force-userspace override"
+# force_userspace is a persisted setting, not the old bin/force-userspace marker file.
+if grep -q 'readSetting("force_userspace"' main.lua && grep -q 'saveSetting("force_userspace"' main.lua; then
+    pass "main.lua exposes force_userspace as a persisted setting"
 else
-    fail "main.lua missing force-userspace override"
+    fail "main.lua missing force_userspace setting"
+fi
+if grep -q 'force-userspace' main.lua; then
+    fail "main.lua still references the force-userspace marker file"
+else
+    pass "main.lua has no marker-file logic"
 fi
 if grep -q 'TS_NETWORK_MODE' bin/start_tailscale.sh; then
     pass "start_tailscale.sh logs selected networking mode"
