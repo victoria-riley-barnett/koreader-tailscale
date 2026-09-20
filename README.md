@@ -117,21 +117,29 @@ defaults to the value the plugin has always used, so an existing install
 behaves exactly as before until you change one. All three take effect on the
 next start.
 
-- **Accept tailnet DNS** (`--accept-dns`, off by default): use the nameservers
-  your tailnet advertises, so names only your own DNS server knows about —
-  hosts on your LAN, for instance — resolve on the device. Turn this on if you
-  run a custom DNS server or split DNS on your tailnet.
+- **Accept tailnet DNS** (`--accept-dns`, off by default): take the DNS
+  configuration your tailnet advertises, so names only your own nameserver knows
+  about — hosts on your LAN, for instance — resolve on the device. Turn this on
+  if you run a custom or split-DNS nameserver on your tailnet.
 
-  tailscaled applies it by rewriting `/etc/resolv.conf`, so it needs a writable
-  rootfs. On Kindle the plugin remounts the rootfs read-write for the duration
-  of start and stop and puts it back afterwards; with the toggle off it does not
-  touch the rootfs at all. On devices whose rootfs cannot be made writable, such
-  as PocketBook, leave this off — tailscaled will not be able to install the
-  resolver config.
+  What this does and does not get you on an e-reader is worth being precise
+  about. tailscaled applies the config in two places. Its own resolver is
+  always configured, and that is what answers for traffic sent through the
+  SOCKS5/HTTP proxy — so tailnet and custom names resolve for KOReader as long
+  as its requests go through the proxy. Enable **Automatically configure HTTP
+  proxy** together with this toggle.
 
-  Turn Tailscale off before disabling this toggle. The remount is driven by the
-  toggle, so flipping it off while connected means the stop cannot restore the
-  original `/etc/resolv.conf`.
+  tailscaled then also tries to point the whole system at itself by rewriting
+  `/etc/resolv.conf`. That fails on the read-only rootfs these devices ship,
+  and it keeps failing for as long as the daemon runs, because every reconfigure
+  writes the file again. So there is no system-wide DNS for other processes on
+  the device, and `tailscale status` reports a `dns-set-os-config-failed` health
+  warning whenever this toggle is on. The warning is expected and does not stop
+  the daemon from running or from resolving names through the proxy.
+
+  Making the rootfs writable to get around this is not recommended: it would
+  have to stay writable for as long as Tailscale is connected, which gives up
+  the corruption protection a read-only rootfs provides.
 - **Accept subnet routes** (`--accept-routes`, on by default): accept routes
   advertised by subnet routers on the tailnet. Only meaningful in kernel TUN
   mode; in userspace mode, reach those hosts through the proxy instead.

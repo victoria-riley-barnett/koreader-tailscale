@@ -382,13 +382,21 @@ function TailscalePlugin:buildUpCommand()
     -- the command line from the TS_* env vars it is handed.
     --
     -- These three are persisted toggles rather than constants because the right
-    -- answer is device-specific. Accepting tailnet DNS is what makes a custom
-    -- nameserver resolve names the device cannot resolve on its own, but it also
-    -- makes tailscaled rewrite /etc/resolv.conf, which needs a writable rootfs
-    -- (see execStartScript). Netfilter has historically stalled Reconfig on
-    -- constrained e-reader kernels, and subnet routes are only reachable at all
-    -- in kernel TUN mode. All three are passed explicitly so `tailscale up`
-    -- never rejects the command for leaving a non-default flag unmentioned.
+    -- answer is device-specific.
+    --
+    -- Accepting tailnet DNS lands in two places, and only one of them works on
+    -- an e-reader. tailscaled always configures its own resolver, which is what
+    -- answers for traffic sent through the SOCKS5/HTTP proxy. It then tries to
+    -- point the system at itself by rewriting /etc/resolv.conf, and that fails
+    -- on the read-only rootfs these devices ship; it keeps failing for as long
+    -- as the daemon runs, because every Reconfig writes the file again. So the
+    -- toggle buys tailnet name resolution for KOReader via the proxy, not
+    -- system-wide DNS, and it leaves a health warning behind either way.
+    --
+    -- Netfilter has historically stalled Reconfig on constrained e-reader
+    -- kernels, and subnet routes are only reachable at all in kernel TUN mode.
+    -- All three are passed explicitly so `tailscale up` never rejects the
+    -- command for leaving a non-default flag unmentioned.
     self._up_flags = "--accept-routes=" .. tostring(self:isFlagEnabled("accept_routes"))
         .. " --accept-dns=" .. tostring(self:isFlagEnabled("accept_dns"))
         .. " --netfilter-mode=" .. (self:isFlagEnabled("netfilter_mode") and "on" or "off")
@@ -447,23 +455,7 @@ function TailscalePlugin:execStartScript(opts)
     if opts and opts.daemon_only then
         env = env .. " TS_DAEMON_ONLY=1"
     end
-
-    -- Kindle ships a read-only rootfs. Accepting tailnet DNS means tailscaled
-    -- writes /etc/resolv.conf, which silently does nothing while the rootfs is
-    -- read-only, so make it writable for the duration of the start. Skipped
-    -- entirely when the DNS toggle is off, which is the default.
-    local remount = Device:isKindle() and self:isFlagEnabled("accept_dns")
-    if remount then
-        os.execute("mntroot rw >/dev/null 2>&1")
-    end
-
     local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
-
-    -- Put the rootfs back the way we found it.
-    if remount then
-        os.execute("mntroot ro >/dev/null 2>&1")
-    end
-
     return ok == true and code == 0
 end
 
@@ -473,19 +465,7 @@ function TailscalePlugin:startDaemon()
 end
 
 function TailscalePlugin:execStopScript()
-    -- Going down, tailscaled restores the resolv.conf it backed up, which needs
-    -- the same writable rootfs the start needed. Turn Tailscale off before
-    -- disabling the DNS toggle, or this restore is skipped.
-    local remount = Device:isKindle() and self:isFlagEnabled("accept_dns")
-    if remount then
-        os.execute("mntroot rw >/dev/null 2>&1")
-    end
-
     os.execute("TS_BIN='" .. self.ts_bin .. "' sh '" .. self.plugin_dir .. "/bin/stop_tailscale.sh'")
-
-    if remount then
-        os.execute("mntroot ro >/dev/null 2>&1")
-    end
 end
 
 function TailscalePlugin:execInstallScript()
