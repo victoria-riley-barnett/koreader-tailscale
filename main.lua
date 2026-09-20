@@ -248,6 +248,27 @@ function TailscalePlugin:isUserspaceForced()
     return self.settings:readSetting("force_userspace") and true or false
 end
 
+-- Defaults for the three `tailscale up` networking toggles below. These
+-- reproduce the flags this plugin has always passed, so an existing install
+-- behaves identically until someone changes a toggle. Kept here rather than
+-- seeded into settings at init, so that "never flipped" stays distinguishable
+-- from "flipped off" without relying on how LuaSettings treats a default
+-- argument.
+local FLAG_DEFAULTS = {
+    accept_routes = true,
+    accept_dns = false,
+    netfilter_mode = false,
+}
+
+--- Read one of the persisted `tailscale up` networking toggles as a plain
+-- boolean. Same reasoning as above: menu-flippable, applied on the next start.
+function TailscalePlugin:isFlagEnabled(key)
+    if not self.settings then return FLAG_DEFAULTS[key] end
+    local value = self.settings:readSetting(key)
+    if value == nil then value = FLAG_DEFAULTS[key] end
+    return value and true or false
+end
+
 -- ─── state directory resolution (formerly shell logic) ────────────
 
 function TailscalePlugin:resolveStateDir()
@@ -359,7 +380,18 @@ end
 function TailscalePlugin:buildUpCommand()
     -- Lua decides every flag and credential here; the executor only assembles
     -- the command line from the TS_* env vars it is handed.
-    self._up_flags = "--accept-routes --accept-dns=false --netfilter-mode=off"
+    --
+    -- These three are persisted toggles rather than constants because the right
+    -- answer is device-specific. Accepting tailnet DNS is what makes a custom
+    -- nameserver resolve names the device cannot resolve on its own, but it also
+    -- makes tailscaled rewrite /etc/resolv.conf, which needs a writable rootfs
+    -- (see execStartScript). Netfilter has historically stalled Reconfig on
+    -- constrained e-reader kernels, and subnet routes are only reachable at all
+    -- in kernel TUN mode. All three are passed explicitly so `tailscale up`
+    -- never rejects the command for leaving a non-default flag unmentioned.
+    self._up_flags = "--accept-routes=" .. tostring(self:isFlagEnabled("accept_routes"))
+        .. " --accept-dns=" .. tostring(self:isFlagEnabled("accept_dns"))
+        .. " --netfilter-mode=" .. (self:isFlagEnabled("netfilter_mode") and "on" or "off")
     self._up_auth_key = self:readAuthKey()
     self._up_headscale_url = self:readHeadscaleUrl()
 end
@@ -415,7 +447,23 @@ function TailscalePlugin:execStartScript(opts)
     if opts and opts.daemon_only then
         env = env .. " TS_DAEMON_ONLY=1"
     end
+
+    -- Kindle ships a read-only rootfs. Accepting tailnet DNS means tailscaled
+    -- writes /etc/resolv.conf, which silently does nothing while the rootfs is
+    -- read-only, so make it writable for the duration of the start. Skipped
+    -- entirely when the DNS toggle is off, which is the default.
+    local remount = Device:isKindle() and self:isFlagEnabled("accept_dns")
+    if remount then
+        os.execute("mntroot rw >/dev/null 2>&1")
+    end
+
     local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
+
+    -- Put the rootfs back the way we found it.
+    if remount then
+        os.execute("mntroot ro >/dev/null 2>&1")
+    end
+
     return ok == true and code == 0
 end
 
@@ -425,7 +473,19 @@ function TailscalePlugin:startDaemon()
 end
 
 function TailscalePlugin:execStopScript()
+    -- Going down, tailscaled restores the resolv.conf it backed up, which needs
+    -- the same writable rootfs the start needed. Turn Tailscale off before
+    -- disabling the DNS toggle, or this restore is skipped.
+    local remount = Device:isKindle() and self:isFlagEnabled("accept_dns")
+    if remount then
+        os.execute("mntroot rw >/dev/null 2>&1")
+    end
+
     os.execute("TS_BIN='" .. self.ts_bin .. "' sh '" .. self.plugin_dir .. "/bin/stop_tailscale.sh'")
+
+    if remount then
+        os.execute("mntroot ro >/dev/null 2>&1")
+    end
 end
 
 function TailscalePlugin:execInstallScript()
@@ -904,6 +964,42 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         callback = function(touchmenu_instance)
                             self.settings:saveSetting("force_userspace",
                                 not self.settings:readSetting("force_userspace"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text = _("Accept tailnet DNS"),
+                        keep_menu_open = true,
+                        checked_func = function() return self:isFlagEnabled("accept_dns") end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("accept_dns", not self:isFlagEnabled("accept_dns"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text = _("Accept subnet routes"),
+                        keep_menu_open = true,
+                        checked_func = function() return self:isFlagEnabled("accept_routes") end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("accept_routes", not self:isFlagEnabled("accept_routes"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text = _("Configure netfilter rules"),
+                        keep_menu_open = true,
+                        checked_func = function() return self:isFlagEnabled("netfilter_mode") end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("netfilter_mode", not self:isFlagEnabled("netfilter_mode"))
                             self:flushSettings()
                             if touchmenu_instance and touchmenu_instance.updateItems then
                                 touchmenu_instance:updateItems()

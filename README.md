@@ -110,6 +110,36 @@ Plugin config → Force userspace mode switches the daemon to
 `--tun=userspace-networking`; use it when kernel TUN is unstable on your
 device. Takes effect on the next start.
 
+### Networking flags
+
+Plugin config carries one toggle per `tailscale up` networking flag. Each
+defaults to the value the plugin has always used, so an existing install
+behaves exactly as before until you change one. All three take effect on the
+next start.
+
+- **Accept tailnet DNS** (`--accept-dns`, off by default): use the nameservers
+  your tailnet advertises, so names only your own DNS server knows about —
+  hosts on your LAN, for instance — resolve on the device. Turn this on if you
+  run a custom DNS server or split DNS on your tailnet.
+
+  tailscaled applies it by rewriting `/etc/resolv.conf`, so it needs a writable
+  rootfs. On Kindle the plugin remounts the rootfs read-write for the duration
+  of start and stop and puts it back afterwards; with the toggle off it does not
+  touch the rootfs at all. On devices whose rootfs cannot be made writable, such
+  as PocketBook, leave this off — tailscaled will not be able to install the
+  resolver config.
+
+  Turn Tailscale off before disabling this toggle. The remount is driven by the
+  toggle, so flipping it off while connected means the stop cannot restore the
+  original `/etc/resolv.conf`.
+- **Accept subnet routes** (`--accept-routes`, on by default): accept routes
+  advertised by subnet routers on the tailnet. Only meaningful in kernel TUN
+  mode; in userspace mode, reach those hosts through the proxy instead.
+- **Configure netfilter rules** (`--netfilter-mode`, off by default): let
+  tailscaled install iptables/nftables rules. Leave this off unless you need it
+  — it has stalled startup and tripped the Reconfig watchdog on Kobo and other
+  constrained kernels.
+
 ### Status and logs
 
 Status shows the device IP and connection info. Logs are written to
