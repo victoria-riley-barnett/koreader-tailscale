@@ -113,7 +113,11 @@ device. Takes effect on the next start.
 ### Status and logs
 
 Status shows the device IP and connection info. Logs are written to
-`bin/tailscale.log` and `bin/tailscaled.log` in the plugin's bin directory.
+`bin/tailscale.log` and `bin/tailscaled.log` in the plugin's bin directory:
+
+- `tailscale.log` holds the output of `tailscale up`
+- `tailscaled.log` holds the
+daemon's own log (TUN, routing, DNS).
 
 ## Networking
 
