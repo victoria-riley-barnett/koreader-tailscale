@@ -206,6 +206,10 @@ function TailscalePlugin:getLogPath()
     return self:getBinDir() .. "/tailscale.log"
 end
 
+function TailscalePlugin:getDaemonLogPath()
+    return self:getBinDir() .. "/tailscaled.log"
+end
+
 -- ─── capability checks (Lua owns these, not shell) ────────────────
 
 function TailscalePlugin:isRunning()
@@ -327,6 +331,20 @@ function TailscalePlugin:readHeadscaleUrl()
     return nil
 end
 
+--- Normalize what `os.execute` hands back so both Lua runtimes agree.
+-- Lua 5.2+ (and Lua 5.4 builds) return `true, "exit", code` on success. KOReader's
+-- LuaJIT is built without LUAJIT_ENABLE_LUA52COMPAT, so it returns the raw wait
+-- status integer instead and never the boolean. Only accepting the 5.2 shape made
+-- every start read as a failure on the device while the daemon was up and
+-- connected, which is what this shields against.
+local function execSucceeded(ok, code)
+    if ok == true then
+        return code == 0
+    end
+    -- LuaJIT: 0 is the only success value; -1 means the shell never ran.
+    return ok == 0
+end
+
 -- ─── command builders (Lua owns all flag decisions) ───────────────
 
 function TailscalePlugin:resolveTunFlag()
@@ -416,7 +434,7 @@ function TailscalePlugin:execStartScript(opts)
         env = env .. " TS_DAEMON_ONLY=1"
     end
     local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
-    return ok == true and code == 0
+    return execSucceeded(ok, code)
 end
 
 --- Launch path: bring the daemon up, touch nothing else.
@@ -1007,7 +1025,10 @@ function TailscalePlugin:connectTailscale()
     self:invalidateBackendState()
 
     UIManager:close(starting_msg)
-    if ok then
+    -- Trust the process over the shell's exit status: the daemon can be up and
+    -- serving even when the script reported non-zero, and telling the user a
+    -- working Tailscale failed is worse than staying quiet about a failure.
+    if ok or self:isRunning() then
         -- The daemon may be waiting on an interactive login; watch for it
         -- rather than blocking, and hand the user a real sign-in UI if so.
         self:stopLoginPolling()
@@ -1018,8 +1039,9 @@ function TailscalePlugin:connectTailscale()
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _("Failed to start Tailscale.\nCheck " .. self:getLogPath() .. " for the error."),
-            timeout = 6,
+            text = _("Failed to start Tailscale.\nCheck the logs for the error:\n")
+                .. self:getLogPath() .. "\n" .. self:getDaemonLogPath(),
+            timeout = 8,
         })
     end
 end
