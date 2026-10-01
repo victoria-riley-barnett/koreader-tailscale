@@ -80,6 +80,7 @@ function TailscalePlugin:init()
     self.settings:readSetting("auto_http_proxy", false)
     self.settings:readSetting("http_proxy_backup_active", false)
     self.settings:readSetting("force_userspace", false)
+    self.settings:readSetting("accept_routes", true)
 
     -- Sign-in UI is opt-in: set when the user asks for a QR code, cleared by
     -- the login poll once it has handed the code over.
@@ -252,6 +253,15 @@ function TailscalePlugin:isUserspaceForced()
     return self.settings:readSetting("force_userspace") and true or false
 end
 
+--- Subnet routes default on, which is what the plugin has always passed. Off is
+-- for a subnet router that advertises the device's own LAN: tailscaled puts
+-- accepted routes ahead of the main table, so replies to LAN peers go into the
+-- tunnel and the device drops off its own network. Takes effect on the next start.
+function TailscalePlugin:acceptsRoutes()
+    if not self.settings then return true end
+    return self.settings:readSetting("accept_routes") ~= false
+end
+
 -- ─── state directory resolution (formerly shell logic) ────────────
 
 function TailscalePlugin:resolveStateDir()
@@ -377,7 +387,9 @@ end
 function TailscalePlugin:buildUpCommand()
     -- Lua decides every flag and credential here; the executor only assembles
     -- the command line from the TS_* env vars it is handed.
-    self._up_flags = "--accept-routes --accept-dns=false --netfilter-mode=off"
+    -- Off is spelled out: `up` keeps the stored value of any flag left off.
+    local routes_flag = self:acceptsRoutes() and "--accept-routes" or "--accept-routes=false"
+    self._up_flags = routes_flag .. " --accept-dns=false --netfilter-mode=off"
     self._up_auth_key = self:readAuthKey()
     self._up_headscale_url = self:readHeadscaleUrl()
 end
@@ -922,6 +934,20 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         callback = function(touchmenu_instance)
                             self.settings:saveSetting("force_userspace",
                                 not self.settings:readSetting("force_userspace"))
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text = _("Accept subnet routes"),
+                        keep_menu_open = true,
+                        checked_func = function()
+                            return self:acceptsRoutes()
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("accept_routes", not self:acceptsRoutes())
                             self:flushSettings()
                             if touchmenu_instance and touchmenu_instance.updateItems then
                                 touchmenu_instance:updateItems()
