@@ -110,6 +110,14 @@ Plugin config → Force userspace mode switches the daemon to
 `--tun=userspace-networking`; use it when kernel TUN is unstable on your
 device. Takes effect on the next start.
 
+### Subnet routes
+
+Plugin config → Accept subnet routes (on by default) lets the device reach
+networks that a subnet router advertises to the tailnet. Turn it off if one
+of those routes covers the device's own LAN: accepted routes take priority
+over the local network, so the device stops answering on its LAN address
+while Tailscale is connected. Takes effect on the next start.
+
 ### Status and logs
 
 Status shows the device IP and connection info. Logs are written to
