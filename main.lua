@@ -283,6 +283,20 @@ local function isSharedFsType(fstype)
         or fstype == "ntfs" or fstype == "ntfs3" or fstype:match("^fuse") ~= nil
 end
 
+-- The user partitions e-readers hand to a computer. The filesystem type alone
+-- does not catch them all: MTP Kindles can export an ext4 /mnt/us, which looks
+-- private to the check above but is just as readable from any computer.
+local SHARED_STORAGE_ROOTS = { "/mnt/us", "/mnt/base-us", "/mnt/onboard", "/mnt/ext1" }
+
+local function isUnderSharedRoot(path)
+    for _, root in ipairs(SHARED_STORAGE_ROOTS) do
+        if path == root or path:sub(1, #root + 1) == root .. "/" then
+            return true
+        end
+    end
+    return false
+end
+
 -- Gone after a reboot, which would cost the node its identity.
 local function isVolatileFsType(fstype)
     return fstype == "tmpfs" or fstype == "ramfs" or fstype == "devtmpfs"
@@ -373,9 +387,10 @@ end
 function TailscalePlugin:resolveStateDir()
     self._state_persistent = true
     local bin_fs = self:fsTypeOf(self.ts_bin)
+    local bin_shared = isUnderSharedRoot(self.ts_bin)
 
     -- bin/ is fine where it is private (reMarkable, Cervantes, ...).
-    if bin_fs and not isSharedFsType(bin_fs) and not isVolatileFsType(bin_fs) then
+    if bin_fs and not bin_shared and not isSharedFsType(bin_fs) and not isVolatileFsType(bin_fs) then
         os.remove(TMPFS_COPY_BACK_MARKER)
         return self.ts_bin
     end
@@ -392,7 +407,8 @@ function TailscalePlugin:resolveStateDir()
     else
         -- No mount table: keep the old heuristic, bin/ if it supports chmod.
         local test_file = self:shellQuote(self.ts_bin .. "/.chmod_test")
-        local usable = run("touch " .. test_file .. " 2>/dev/null && chmod 0600 " .. test_file .. " 2>/dev/null")
+        local usable = not bin_shared
+            and run("touch " .. test_file .. " 2>/dev/null && chmod 0600 " .. test_file .. " 2>/dev/null")
         os.execute("rm -f " .. test_file .. " 2>/dev/null")
         if usable then
             os.remove(TMPFS_COPY_BACK_MARKER)

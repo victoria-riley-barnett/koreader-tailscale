@@ -134,8 +134,10 @@ device. Takes effect on the next start.
 
 `tailscaled.state` holds the node's private keys; a copy of it lets another
 machine pose as this device on your tailnet. Kindle, Kobo and PocketBook
-expose the plugin directory over USB, so when `bin/` is on a USB-shared
-filesystem (vfat, exFAT, NTFS, fuse) the plugin keeps state in the first of
+expose the plugin directory over USB (mass storage or MTP), so when `bin/` is
+under a user partition (`/mnt/us`, `/mnt/base-us`, `/mnt/onboard`, `/mnt/ext1`)
+or on a USB-shared filesystem (vfat, exFAT, NTFS, fuse) the plugin keeps state
+in the first of
 these whose parent exists on a persistent, non-shared filesystem, created
 root-only (0700):
 
