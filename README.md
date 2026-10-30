@@ -18,6 +18,15 @@ and file sync over the tailnet. Requires an ARMv7 or ARM64 device.
 
 The download is about 57 MB. Do not close KOReader during installation.
 
+Every download is checked against a SHA-256 before anything is installed, and a
+mismatch installs nothing. Most e-readers only have busybox `wget`, which does
+not validate TLS certificates, so the source of that hash matters:
+
+- With `curl` or GNU Wget (both validate TLS), the installer fetches the latest
+  release and checks it against the `.sha256` Tailscale publishes beside it.
+- Otherwise it installs the release pinned in `bin/install-tailscale.sh`, checked
+  against the hash pinned there. It never replaces a newer install with the pin.
+
 ### Manual installation
 
 If the automatic installation fails, install the binaries by hand. The
@@ -29,7 +38,12 @@ examples use the Kindle paths; substitute the plugin directory on your device.
 
    ```sh
    wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz
+   wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz.sha256
+   echo "$(cat tailscale_<version>_arm.tgz.sha256)  tailscale_<version>_arm.tgz" | sha256sum -c
    ```
+
+   Do this on a computer, not on the device: the device's `wget` may not
+   validate TLS, which would make the check meaningless.
 
 2. Transfer the archive to the device and extract it:
 
@@ -47,9 +61,8 @@ examples use the Kindle paths; substitute the plugin directory on your device.
 ### Uninstall
 
 Network → Tailscale VPN → Plugin config → Uninstall Tailscale stops Tailscale
-and removes its files, including the auth key. Restart KOReader to finish.
-Back up `bin/auth.key` first if you want to keep it, then reinstall with
-Install/Update Tailscale.
+and removes its files, including the node state and any auth key still on the
+device. Restart KOReader to finish.
 
 ### What the plugin relies on from the device
 
@@ -74,9 +87,12 @@ Under Network setup:
 
 - **Scan QR code** — shows the sign-in QR (connecting first if needed). Scan
   it with your phone, approve the device, and the code dismisses itself.
-- **Use an auth key** — drop a reusable key at `bin/auth.key` and tap
-  "Check again". The file must contain the key alone (`tskey-...` or
-  `hskey-auth-...`):
+- **Use an auth key** — drop a key at `bin/auth.key` and tap "Check again".
+  The file must contain the key alone (`tskey-...` or `hskey-auth-...`).
+  Once the device is signed in the plugin deletes the file, since the key is
+  no longer needed and `bin/` is readable over USB. Prefer a single-use,
+  tagged key over a reusable one: a copied reusable key lets anyone add
+  devices to your tailnet until it expires.
 
   - Kindle: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key`
   - Kobo: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key`
@@ -85,6 +101,10 @@ Under Network setup:
   ```sh
   scp -P 2222 auth.key user@kindle-ip:/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key
   ```
+
+  The key reaches `tailscale up` as a root-only file on tmpfs
+  (`--auth-key=file:`), never on the command line or in the environment, and
+  that file is deleted as soon as `up` returns.
 
 - **Control plane** — Network setup → Control plane, enter the URL of a
   self-hosted Headscale server. The row reads `Control plane: Tailscale
@@ -109,6 +129,26 @@ setting on disconnect.
 Plugin config → Force userspace mode switches the daemon to
 `--tun=userspace-networking`; use it when kernel TUN is unstable on your
 device. Takes effect on the next start.
+
+### Where the node's keys live
+
+`tailscaled.state` holds the node's private keys; a copy of it lets another
+machine pose as this device on your tailnet. Kindle, Kobo and PocketBook
+expose the plugin directory over USB, so when `bin/` is on a USB-shared
+filesystem (vfat, exFAT, NTFS, fuse) the plugin keeps state in the first of
+these whose parent exists on a persistent, non-shared filesystem, created
+root-only (0700):
+
+- `/var/local/koreader-tailscale` (Kindle's system partition)
+- `/usr/local/koreader-tailscale` (Kobo's root filesystem)
+- `/var/lib/koreader-tailscale`
+
+Where `bin/` is already private (reMarkable, Cervantes), state stays in `bin/`.
+
+State already in `bin/` moves there on the next start. Only when none of these
+is usable does it fall back to `/tmp/tailscale`, copied back to `bin/` on stop.
+In that mode the auth key is also kept, because a crash would cost the node
+its identity.
 
 ### Status and logs
 

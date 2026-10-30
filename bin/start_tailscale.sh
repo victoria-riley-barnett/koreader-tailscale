@@ -68,30 +68,36 @@ if ./tailscale status --json >/dev/null 2>&1; then
         | sed -n 's/.*"HostName":[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -n1)
 fi
-HOST_FLAG=""
-[ -n "$HOSTNAME" ] && HOST_FLAG="--hostname='$HOSTNAME'"
-
-quote_arg() {
-    printf "%s" "$1" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
-}
-
-# Build the `tailscale up` command: core flags come from Lua, extras appended
-# here. `up` only writes the prefs you actually pass — an omitted flag keeps its
+# Build the `tailscale up` arguments as a list, never as a string for `sh -c`:
+# hostname, login server and exit node are data, and a second shell would run
+# any $(...), backticks or quotes inside them as root. Core flags come from Lua
+# and are split on purpose (globbing off so they stay literal).
+# `up` only writes the prefs you actually pass — an omitted flag keeps its
 # stored value — so every flag this plugin owns has to be passed every time,
 # including the ones that mean "off". That is why --exit-node is sent empty
 # rather than skipped: skipping it would leave a previously chosen exit node in
 # place and the menu toggle would look like it did nothing.
-CMD="./tailscale up $TS_UP_FLAGS $HOST_FLAG"
-[ -n "$TS_AUTH_KEY" ] && CMD="$CMD --auth-key=\"$TS_AUTH_KEY\""
-[ -n "$TS_LOGIN_SERVER" ] && CMD="$CMD --login-server=\"$TS_LOGIN_SERVER\""
+set -f
+# shellcheck disable=SC2086
+set -- up $TS_UP_FLAGS
+set +f
+[ -n "$HOSTNAME" ] && set -- "$@" "--hostname=$HOSTNAME"
+# The key arrives as a root-only file on tmpfs, not as a value: argv shows in
+# `ps`, and an env var would be inherited by tailscaled for its whole lifetime.
+[ -n "$TS_AUTH_KEY_FILE" ] && set -- "$@" "--auth-key=file:$TS_AUTH_KEY_FILE"
+[ -n "$TS_LOGIN_SERVER" ] && set -- "$@" "--login-server=$TS_LOGIN_SERVER"
 if [ "${USE_EXIT_NODE:-0}" = "1" ] && [ -n "${EXIT_NODE:-}" ]; then
-    CMD="$CMD --exit-node=$(quote_arg "$EXIT_NODE") --exit-node-allow-lan-access"
+    set -- "$@" "--exit-node=$EXIT_NODE" --exit-node-allow-lan-access
 else
-    CMD="$CMD --exit-node= --exit-node-allow-lan-access=false"
+    set -- "$@" --exit-node= --exit-node-allow-lan-access=false
 fi
 
 # Run in the background: without an auth key `tailscale up` blocks waiting for
 # interactive login. The plugin polls `tailscale status --json` for login state.
-sh -c "$CMD" < /dev/null > tailscale.log 2>&1 &
+# The staged key is deleted as soon as `up` returns, whatever the outcome.
+(
+    ./tailscale "$@" < /dev/null > tailscale.log 2>&1
+    [ -n "$TS_AUTH_KEY_FILE" ] && rm -f "$TS_AUTH_KEY_FILE"
+) &
 
 exit 0

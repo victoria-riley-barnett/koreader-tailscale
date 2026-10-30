@@ -19,11 +19,16 @@ while pgrep tailscaled >/dev/null 2>&1; do
 done
 
 # Sync tmpfs state back to persistent storage so node identity survives
-# reboots on FAT32 devices (state lives in /tmp/tailscale, see resolveStateDir).
-for f in tailscaled.state tailscaled.log.conf; do
-    if [ -f "/tmp/tailscale/$f" ]; then
-        cp -f "/tmp/tailscale/$f" "$BIN_DIR/$f" 2>/dev/null || true
-    fi
-done
+# reboots — only on devices with no private persistent dir, where Lua fell back
+# to /tmp/tailscale and left the marker (see resolveStateDir). Anywhere else the
+# state already lives somewhere persistent, and copying it into bin/ would put
+# the node's private keys back on the USB-exported partition.
+if [ -f /tmp/tailscale/.copy_back_to_bin ]; then
+    for f in tailscaled.state tailscaled.log.conf; do
+        if [ -f "/tmp/tailscale/$f" ]; then
+            cp -f "/tmp/tailscale/$f" "$BIN_DIR/$f" 2>/dev/null || true
+        fi
+    done
+fi
 
 exit 0

@@ -129,7 +129,8 @@ function TailscalePlugin:installUSBMSHook()
                     f:close()
                 end
                 -- Synchronous: the filesystem must be free before the USBMS tool unmounts it.
-                os.execute("TS_BIN='" .. ts_bin .. "' sh '" .. plugin_dir .. "/bin/stop_tailscale.sh'")
+                os.execute("TS_BIN=" .. TailscalePlugin:shellQuote(ts_bin) .. " sh "
+                    .. TailscalePlugin:shellQuote(plugin_dir .. "/bin/stop_tailscale.sh"))
             end
         end
         return orig_quit(uimgr, exit_code, ...)
@@ -221,8 +222,8 @@ function TailscalePlugin:isRunning()
 end
 
 function TailscalePlugin:binariesExist()
-    local h = io.popen("test -f '" .. self.ts_bin .. "/tailscale' && test -f '"
-        .. self.ts_bin .. "/tailscaled' && echo 'yes'")
+    local h = io.popen("test -f " .. self:shellQuote(self.ts_bin .. "/tailscale") .. " && test -f "
+        .. self:shellQuote(self.ts_bin .. "/tailscaled") .. " && echo 'yes'")
     if not h then return false end
     local result = h:read("*a") or ""
     h:close()
@@ -252,31 +253,167 @@ function TailscalePlugin:isUserspaceForced()
     return self.settings:readSetting("force_userspace") and true or false
 end
 
+--- Normalize what `os.execute` hands back so both Lua runtimes agree.
+-- Lua 5.2+ (and Lua 5.4 builds) return `true, "exit", code` on success. KOReader's
+-- LuaJIT is built without LUAJIT_ENABLE_LUA52COMPAT, so it returns the raw wait
+-- status integer instead and never the boolean. Only accepting the 5.2 shape made
+-- every start read as a failure on the device while the daemon was up and
+-- connected, which is what this shields against.
+local function execSucceeded(ok, code)
+    if ok == true then
+        return code == 0
+    end
+    -- LuaJIT: 0 is the only success value; -1 means the shell never ran.
+    return ok == 0
+end
+
+local function run(cmd)
+    local ok, _, code = os.execute(cmd)
+    return execSucceeded(ok, code)
+end
+
 -- ─── state directory resolution (formerly shell logic) ────────────
 
+-- tailscaled.state holds the node's private keys, so where it lives decides
+-- who can clone the node. These are the filesystems e-readers export over USB
+-- mass storage (Kobo and PocketBook vfat, Kindle's fuse layer over /mnt/us):
+-- anything there is readable by every computer the device is plugged into.
+local function isSharedFsType(fstype)
+    return fstype == "vfat" or fstype == "msdos" or fstype == "exfat"
+        or fstype == "ntfs" or fstype == "ntfs3" or fstype:match("^fuse") ~= nil
+end
+
+-- Gone after a reboot, which would cost the node its identity.
+local function isVolatileFsType(fstype)
+    return fstype == "tmpfs" or fstype == "ramfs" or fstype == "devtmpfs"
+end
+
+-- Persistent, root-only homes off the user partition, tried in order when the
+-- plugin's own bin/ is on a shared filesystem. Named for this plugin so they
+-- never collide with a system tailscaled's /var/lib/tailscale.
+--   /var/local: Kindle's persistent system partition
+--   /usr/local: Kobo's root filesystem
+--   /var/lib:   everything else
+local PRIVATE_STATE_DIRS = {
+    "/var/local/koreader-tailscale",
+    "/usr/local/koreader-tailscale",
+    "/var/lib/koreader-tailscale",
+}
+local STATE_FILES = { "tailscaled.state", "tailscaled.log.conf" }
+
+-- Last resort when no private dir works: state on tmpfs, copied back to bin/
+-- by stop_tailscale.sh — but only while this marker says that mode is active.
+local TMPFS_STATE_DIR = "/tmp/tailscale"
+local TMPFS_COPY_BACK_MARKER = TMPFS_STATE_DIR .. "/.copy_back_to_bin"
+
+--- Filesystem type of the mount holding `path`: the longest mount point in
+-- /proc/mounts that prefixes it, the later entry winning a tie (overmounts).
+-- nil when the mount table cannot be read.
+function TailscalePlugin:fsTypeOf(path, mounts_file)
+    local f = io.open(mounts_file or "/proc/mounts", "r")
+    if not f then return nil end
+    local best_len, best_type = -1, nil
+    for line in f:lines() do
+        local mp, fstype = line:match("^%S+%s+(%S+)%s+(%S+)")
+        if mp then
+            -- The kernel escapes spaces and friends as \040-style octal.
+            mp = mp:gsub("\\(%d%d%d)", function(o) return string.char(tonumber(o, 8)) end)
+            local covers = mp == "/" or path == mp or path:sub(1, #mp + 1) == mp .. "/"
+            if covers and #mp >= best_len then
+                best_len, best_type = #mp, fstype
+            end
+        end
+    end
+    f:close()
+    return best_type
+end
+
+--- Create `dir` root-only and confirm it really is private and persistent:
+-- its parent must already exist (we never invent /var/lib on a device that has
+-- none), its filesystem must be neither shared nor volatile, and the 0700 mode
+-- must actually have stuck.
+function TailscalePlugin:preparePrivateDir(dir)
+    local fstype = self:fsTypeOf(dir)
+    if not fstype or isSharedFsType(fstype) or isVolatileFsType(fstype) then
+        return false
+    end
+    local q = self:shellQuote(dir)
+    local parent = self:shellQuote(dir:match("^(.*)/[^/]+$"))
+    local h = io.popen("umask 077 && [ -d " .. parent .. " ] && { [ -d " .. q .. " ] || mkdir " .. q
+        .. "; } 2>/dev/null && chmod 700 " .. q .. " 2>/dev/null && [ -w " .. q .. " ] && ls -ld " .. q
+        .. " 2>/dev/null")
+    if not h then return false end
+    local out = h:read("*a") or ""
+    h:close()
+    return out:match("^drwx%-%-%-%-%-%-") ~= nil
+end
+
+--- Move node state out of bin/ into `dir`. Runs on every start so it also
+-- cleans up after an old daemon that rewrote bin/ on its way down: a copy
+-- already in `dir` is the one in use, so it wins and the bin/ copy is dropped.
+function TailscalePlugin:migrateStateOutOfBin(dir)
+    for _, f in ipairs(STATE_FILES) do
+        local src = self.ts_bin .. "/" .. f
+        local probe = io.open(src, "r")
+        if probe then
+            probe:close()
+            local dst = self:shellQuote(dir .. "/" .. f)
+            if run("umask 077 && { [ -f " .. dst .. " ] || cp -f " .. self:shellQuote(src) .. " " .. dst
+                .. "; } 2>/dev/null && chmod 600 " .. dst .. " 2>/dev/null") then
+                os.remove(src)
+                logger.info("Tailscale: moved " .. f .. " out of " .. self.ts_bin)
+            end
+        end
+    end
+end
+
+--- Pick the state dir and record whether it survives a reboot
+-- (`self._state_persistent`), which decides whether the auth key may be
+-- deleted once the node is signed in.
 function TailscalePlugin:resolveStateDir()
-    -- Test if bin dir supports chmod; if so, use it directly.
-    -- Otherwise, fall back to /tmp/tailscale (tmpfs).
-    local test_file = self.ts_bin .. "/.chmod_test"
-    local h = io.popen("touch '" .. test_file .. "' 2>/dev/null && chmod 0600 '" .. test_file .. "' 2>/dev/null && echo 'yes'")
-    if h then
-        local result = h:read("*a") or ""
-        h:close()
-        os.execute("rm -f '" .. test_file .. "' 2>/dev/null")
-        if result:match("yes") then
+    self._state_persistent = true
+    local bin_fs = self:fsTypeOf(self.ts_bin)
+
+    -- bin/ is fine where it is private (reMarkable, Cervantes, ...).
+    if bin_fs and not isSharedFsType(bin_fs) and not isVolatileFsType(bin_fs) then
+        os.remove(TMPFS_COPY_BACK_MARKER)
+        return self.ts_bin
+    end
+
+    if bin_fs then
+        for _, dir in ipairs(PRIVATE_STATE_DIRS) do
+            if self:preparePrivateDir(dir) then
+                os.remove(TMPFS_COPY_BACK_MARKER)
+                self:migrateStateOutOfBin(dir)
+                return dir
+            end
+        end
+        logger.warn("Tailscale: no private state dir available; node keys will be copied back to " .. self.ts_bin)
+    else
+        -- No mount table: keep the old heuristic, bin/ if it supports chmod.
+        local test_file = self:shellQuote(self.ts_bin .. "/.chmod_test")
+        local usable = run("touch " .. test_file .. " 2>/dev/null && chmod 0600 " .. test_file .. " 2>/dev/null")
+        os.execute("rm -f " .. test_file .. " 2>/dev/null")
+        if usable then
+            os.remove(TMPFS_COPY_BACK_MARKER)
             return self.ts_bin
         end
     end
-    os.execute("rm -f '" .. test_file .. "' 2>/dev/null")
 
     -- Use tmpfs, copy existing state so node identity is preserved
-    local tmpfs = "/tmp/tailscale"
-    os.execute("mkdir -p '" .. tmpfs .. "' 2>/dev/null")
-    for _, f in ipairs({"tailscaled.state", "tailscaled.log.conf"}) do
-        os.execute("[ -f '" .. self.ts_bin .. "/" .. f .. "' ] && cp -f '"
-            .. self.ts_bin .. "/" .. f .. "' '" .. tmpfs .. "/" .. f .. "' 2>/dev/null || true")
+    self._state_persistent = false
+    local tmpfs = self:shellQuote(TMPFS_STATE_DIR)
+    os.execute("umask 077 && mkdir -p " .. tmpfs .. " 2>/dev/null")
+    for _, f in ipairs(STATE_FILES) do
+        local src = self:shellQuote(self.ts_bin .. "/" .. f)
+        os.execute("[ -f " .. src .. " ] && cp -f " .. src .. " " .. self:shellQuote(TMPFS_STATE_DIR .. "/" .. f)
+            .. " 2>/dev/null || true")
     end
-    return tmpfs
+    local marker = io.open(TMPFS_COPY_BACK_MARKER, "w")
+    if marker then
+        marker:close()
+    end
+    return TMPFS_STATE_DIR
 end
 
 -- ─── loopback setup (formerly shell logic) ────────────────────────
@@ -331,20 +468,6 @@ function TailscalePlugin:readHeadscaleUrl()
     return nil
 end
 
---- Normalize what `os.execute` hands back so both Lua runtimes agree.
--- Lua 5.2+ (and Lua 5.4 builds) return `true, "exit", code` on success. KOReader's
--- LuaJIT is built without LUAJIT_ENABLE_LUA52COMPAT, so it returns the raw wait
--- status integer instead and never the boolean. Only accepting the 5.2 shape made
--- every start read as a failure on the device while the daemon was up and
--- connected, which is what this shields against.
-local function execSucceeded(ok, code)
-    if ok == true then
-        return code == 0
-    end
-    -- LuaJIT: 0 is the only success value; -1 means the shell never ran.
-    return ok == 0
-end
-
 -- ─── command builders (Lua owns all flag decisions) ───────────────
 
 function TailscalePlugin:resolveTunFlag()
@@ -382,6 +505,49 @@ function TailscalePlugin:buildUpCommand()
     self._up_headscale_url = self:readHeadscaleUrl()
 end
 
+-- tmpfs, so a staged key never touches the user partition.
+local AUTH_KEY_STAGE_DIR = "/tmp/tailscale-auth"
+
+--- Hand the key to `tailscale up` as a root-only file (`--auth-key=file:`)
+-- rather than as a value: argv shows in `ps`, and an env var would be
+-- inherited by tailscaled for its whole lifetime. start_tailscale.sh deletes
+-- the file as soon as `up` returns. nil when it cannot be staged.
+function TailscalePlugin:stageAuthKey(key)
+    local path = AUTH_KEY_STAGE_DIR .. "/authkey"
+    local qdir = self:shellQuote(AUTH_KEY_STAGE_DIR)
+    local qpath = self:shellQuote(path)
+    -- Created empty under umask 077 first, so the key is never readable by
+    -- anyone else, not even for the moment before a chmod.
+    if not run("umask 077 && mkdir -p " .. qdir .. " && chmod 700 " .. qdir
+            .. " && rm -f " .. qpath .. " && : > " .. qpath) then
+        logger.warn("Tailscale: could not stage the auth key")
+        return nil
+    end
+    local f = io.open(path, "w")
+    if not f then
+        return nil
+    end
+    f:write(key)
+    f:close()
+    return path
+end
+
+--- The key only matters until the node is signed in; from then on the node's
+-- own state carries its identity. Left in bin/ it would let anyone with the
+-- device, or a USB cable to it, enrol their own machines in the tailnet, so it
+-- goes — unless state is on tmpfs, where a crash loses the identity and the key
+-- is what gets the node back in. Returns true when the key was deleted.
+function TailscalePlugin:forgetAuthKey()
+    if not self._state_persistent then
+        return false
+    end
+    if os.remove(self:getAuthKeyPath()) then
+        logger.info("Tailscale: signed in; deleted " .. self:getAuthKeyPath())
+        return true
+    end
+    return false
+end
+
 -- ─── thin shell executors ─────────────────────────────────────────
 
 function TailscalePlugin:flushSettings()
@@ -406,8 +572,8 @@ function TailscalePlugin:getStartEnvironment(state_dir)
     if self._up_headscale_url then
         env = env .. " TS_LOGIN_SERVER=" .. self:shellQuote(self._up_headscale_url)
     end
-    if self._up_auth_key then
-        env = env .. " TS_AUTH_KEY=" .. self:shellQuote(self._up_auth_key)
+    if self._up_auth_key_file then
+        env = env .. " TS_AUTH_KEY_FILE=" .. self:shellQuote(self._up_auth_key_file)
     end
     if self.settings and self.settings:readSetting("use_exit_node") then
         local exit_node = (self.settings:readSetting("exit_node") or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -429,11 +595,17 @@ function TailscalePlugin:execStartScript(opts)
     self:resolveTunFlag()
     self:buildUpCommand()
 
+    -- Only the connect path runs `tailscale up`, so only it needs the key.
+    self._up_auth_key_file = nil
+    if self._up_auth_key and not (opts and opts.daemon_only) then
+        self._up_auth_key_file = self:stageAuthKey(self._up_auth_key)
+    end
+
     local env = self:getStartEnvironment(state_dir)
     if opts and opts.daemon_only then
         env = env .. " TS_DAEMON_ONLY=1"
     end
-    local ok, _, code = os.execute(env .. " sh '" .. self.plugin_dir .. "/bin/start_tailscale.sh'")
+    local ok, _, code = os.execute(env .. " sh " .. self:shellQuote(self.plugin_dir .. "/bin/start_tailscale.sh"))
     return execSucceeded(ok, code)
 end
 
@@ -443,17 +615,19 @@ function TailscalePlugin:startDaemon()
 end
 
 function TailscalePlugin:execStopScript()
-    os.execute("TS_BIN='" .. self.ts_bin .. "' sh '" .. self.plugin_dir .. "/bin/stop_tailscale.sh'")
+    os.execute("TS_BIN=" .. self:shellQuote(self.ts_bin) .. " sh "
+        .. self:shellQuote(self.plugin_dir .. "/bin/stop_tailscale.sh"))
 end
 
 function TailscalePlugin:execInstallScript()
     -- Returns io.popen handle so caller can capture output
-    return io.popen("TS_BIN='" .. self.ts_bin .. "' TS_ARCH='" .. self.ts_arch .. "' sh '"
-        .. self.plugin_dir .. "/bin/install-tailscale.sh' 2>&1")
+    return io.popen("TS_BIN=" .. self:shellQuote(self.ts_bin) .. " TS_ARCH=" .. self:shellQuote(self.ts_arch)
+        .. " sh " .. self:shellQuote(self.plugin_dir .. "/bin/install-tailscale.sh") .. " 2>&1")
 end
 
 function TailscalePlugin:execUninstallScript()
-    os.execute("TS_BIN='" .. self.ts_bin .. "' sh '" .. self.plugin_dir .. "/bin/uninstall-tailscale.sh'")
+    os.execute("TS_BIN=" .. self:shellQuote(self.ts_bin) .. " sh "
+        .. self:shellQuote(self.plugin_dir .. "/bin/uninstall-tailscale.sh"))
 end
 
 -- ─── HTTP proxy management ────────────────────────────────────────
@@ -551,7 +725,7 @@ end
 -- read that never blocks. string.match rather than the JSON library: we only
 -- need these two scalars, and the daemon is not ours to trust with a parse.
 function TailscalePlugin:getBackendState()
-    local h = io.popen("'" .. self.ts_bin .. "/tailscale' status --json 2>/dev/null")
+    local h = io.popen(self:shellQuote(self.ts_bin .. "/tailscale") .. " status --json 2>/dev/null")
     if not h then return nil, nil end
     local raw = h:read("*a") or ""
     h:close()
@@ -613,7 +787,12 @@ function TailscalePlugin:onLoginComplete()
         signed_in_interactively = true
     end
     self:enableHTTPProxyIfNeeded()
-    if signed_in_interactively then
+    if self._up_auth_key_file and self:forgetAuthKey() then
+        UIManager:show(InfoMessage:new{
+            text = _("Tailscale connected.\nThe auth key was deleted from the device; it is no longer needed."),
+            timeout = 5,
+        })
+    elseif signed_in_interactively then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale connected."),
             timeout = 3,
@@ -1067,7 +1246,7 @@ function TailscalePlugin:showStatus()
     local lines = {}
     table.insert(lines, self:isRunning() and "Tailscale: Running" or "Tailscale: Not running")
 
-    local h = io.popen("'" .. self.ts_bin .. "/tailscale' status --json 2>/dev/null")
+    local h = io.popen(self:shellQuote(self.ts_bin .. "/tailscale") .. " status --json 2>/dev/null")
     if not h then
         UIManager:show(InfoMessage:new{ text = table.concat(lines, "\n"), timeout = 8 })
         return
@@ -1104,7 +1283,7 @@ function TailscalePlugin:showStatus()
         end
     else
         -- Fallback to terse commands
-        local ip_h = io.popen("'" .. self.ts_bin .. "/tailscale' ip 2>/dev/null")
+        local ip_h = io.popen(self:shellQuote(self.ts_bin .. "/tailscale") .. " ip 2>/dev/null")
         if ip_h then
             local ips = (ip_h:read("*a") or ""):gsub("%s+$", "\n"):gsub("\n+", ", ")
             ip_h:close()
@@ -1184,7 +1363,7 @@ end
 function TailscalePlugin:listExitNodes()
     local nodes = {}
     if not self:isRunning() then return nodes end
-    local h = io.popen("'" .. self.ts_bin .. "/tailscale' exit-node list 2>/dev/null")
+    local h = io.popen(self:shellQuote(self.ts_bin .. "/tailscale") .. " exit-node list 2>/dev/null")
     if not h then return nodes end
     local raw = h:read("*a") or ""
     h:close()
@@ -1297,6 +1476,10 @@ function TailscalePlugin:uninstallTailscale()
         timeout = 2,
     })
     self:execUninstallScript()
+    -- The script only knows bin/ and /tmp; the private state dirs are ours.
+    for _, dir in ipairs(PRIVATE_STATE_DIRS) do
+        os.execute("rm -rf " .. self:shellQuote(dir) .. " 2>/dev/null")
+    end
     UIManager:show(InfoMessage:new{
         text = _("Tailscale removed.\nRestart KOReader to finish."),
         timeout = 3,
