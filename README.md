@@ -27,8 +27,9 @@ The full instructions are below. In short:
 3. Restart KOReader and tap Network → Tailscale VPN → Install/Update Tailscale.
    It downloads the right binaries for your device and checks them before
    installing.
-4. Sign in by scanning the QR code with your phone, or drop a reusable auth key
-   at `bin/auth.key`.
+4. Sign in by scanning the QR code with your phone, or use an auth key. See the
+   [platform notes](docs/platforms/README.md) for device-specific paths and
+   networking details.
 
 For Syncthing, use the Tailscale IP in the device's Addresses field:
 `tcp://<tailscale-ip>:22000`. Any other service on the device (SSH, a file
@@ -36,12 +37,8 @@ browser) is reached the same way, using the IP shown in Status.
 
 ## Installation
 
-1. Copy `tailscale.koplugin` into the KOReader plugins directory:
-
-   - Kindle: `/mnt/us/koreader/plugins/`
-   - Kobo: `/mnt/onboard/.adds/koreader/plugins/`
-   - PocketBook: `/mnt/ext1/koreader/plugins/`
-
+1. Copy `tailscale.koplugin` into KOReader's plugins directory. See the
+   [platform notes](docs/platforms/README.md) for device-specific locations.
 2. Restart KOReader.
 3. Open Network → Tailscale VPN → Install/Update Tailscale. In reader mode,
    open the gear icon and go to Settings → Network → Tailscale VPN.
@@ -50,8 +47,7 @@ The download is about 57 MB. Do not close KOReader during installation.
 
 ### Manual installation
 
-If the automatic installation fails, install the binaries by hand. The
-examples use the Kindle paths; substitute the plugin directory on your device.
+If the automatic installation fails, install the binaries by hand.
 
 1. Download the binaries for your architecture (`arm` for ARMv7, `arm64` for
    ARM64). The version in the URLs is an example; current releases are listed
@@ -66,11 +62,18 @@ examples use the Kindle paths; substitute the plugin directory on your device.
    Do this on a computer, not on the device: the device's `wget` may not
    validate TLS, which would make the check meaningless.
 
-2. Transfer the archive to the device and extract it:
+2. Transfer the archive to the device's plugin `bin` directory. The example
+   uses SSH; see the [platform notes](docs/platforms/README.md) for common
+   paths.
 
    ```sh
-   scp -P 2222 tailscale_<version>_arm.tgz root@<device-ip>:/mnt/us/koreader/plugins/tailscale.koplugin/bin/
-   cd /mnt/us/koreader/plugins/tailscale.koplugin/bin
+   scp -P 2222 tailscale_<version>_arm.tgz root@<device-ip>:/path/to/tailscale.koplugin/bin/
+   ```
+
+   Then, on the device:
+
+   ```sh
+   cd /path/to/tailscale.koplugin/bin
    tar xzf tailscale_<version>_arm.tgz
    mv tailscale_*/tailscale tailscale_*/tailscaled ./
    rm -rf tailscale_* tailscale_<version>_arm.tgz
@@ -85,17 +88,6 @@ Network → Tailscale VPN → Plugin config → Uninstall Tailscale stops Tailsc
 and removes its files, including the node state and any auth key still on the
 device. Restart KOReader to finish.
 
-### What the plugin relies on from the device
-
-A CA bundle for TLS. Typically located in KOReader's data directory:
-
-- Kindle: `/mnt/us/koreader/data/ca-bundle.crt`
-- Kobo: `/mnt/onboard/.adds/koreader/data/ca-bundle.crt`
-
-The start script probes these paths, non-exhaustively. If your bundle lives
-elsewhere, export `SSL_CERT_FILE=/path/to/ca-bundle.crt` before starting
-KOReader and it is used as-is.
-
 ## Usage
 
 The top row of Network → Tailscale VPN reports the connection and acts on it:
@@ -108,24 +100,14 @@ Under Network setup:
 
 - **Scan QR code** — shows the sign-in QR (connecting first if needed). Scan
   it with your phone, approve the device, and the code dismisses itself.
-- **Use an auth key** — drop a key at `bin/auth.key` and tap "Check again".
+- **Use an auth key** — place a key in the plugin's `bin/auth.key` file and tap
+  "Check again". See the [platform notes](docs/platforms/README.md) for its
+  location on your device.
   The file must contain the key alone (`tskey-...` or `hskey-auth-...`).
   Once the device is signed in the plugin deletes the file, since the key is
   no longer needed and `bin/` is readable over USB. Prefer a single-use,
   tagged key over a reusable one: a copied reusable key lets anyone add
   devices to your tailnet until it expires.
-
-  - Kindle: `/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key`
-  - Kobo: `/mnt/onboard/.adds/koreader/plugins/tailscale.koplugin/bin/auth.key`
-  - PocketBook: `/mnt/ext1/tailscale/bin/auth.key` (external storage)
-
-  ```sh
-  scp -P 2222 auth.key user@kindle-ip:/mnt/us/koreader/plugins/tailscale.koplugin/bin/auth.key
-  ```
-
-  The key reaches `tailscale up` as a root-only file on tmpfs
-  (`--auth-key=file:`), never on the command line or in the environment, and
-  that file is deleted as soon as `up` returns.
 
 - **Control plane** — Network setup → Control plane, enter the URL of a
   self-hosted Headscale server. The row reads `Control plane: Tailscale
@@ -147,31 +129,9 @@ setting on disconnect.
 
 ### Force userspace mode
 
-Plugin config → Force userspace mode switches the daemon to
-`--tun=userspace-networking`; use it when kernel TUN is unstable on your
-device. Takes effect on the next start.
-
-### Where the node's keys live
-
-`tailscaled.state` holds the node's private keys; a copy of it lets another
-machine pose as this device on your tailnet. Kindle, Kobo and PocketBook
-expose the plugin directory over USB (mass storage or MTP), so when `bin/` is
-under a user partition (`/mnt/us`, `/mnt/base-us`, `/mnt/onboard`, `/mnt/ext1`)
-or on a USB-shared filesystem (vfat, exFAT, NTFS, fuse) the plugin keeps state
-in the first of
-these whose parent exists on a persistent, non-shared filesystem, created
-root-only (0700):
-
-- `/var/local/koreader-tailscale` (Kindle's system partition)
-- `/usr/local/koreader-tailscale` (Kobo's root filesystem)
-- `/var/lib/koreader-tailscale`
-
-Where `bin/` is already private (reMarkable, Cervantes), state stays in `bin/`.
-
-State already in `bin/` moves there on the next start. Only when none of these
-is usable does it fall back to `/tmp/tailscale`, copied back to `bin/` on stop.
-In that mode the auth key is also kept, because a crash would cost the node
-its identity.
+Plugin config → Force userspace mode selects the alternate networking mode;
+use it when kernel TUN is unstable on your device. Takes effect on the next
+start.
 
 ### Subnet routes
 
@@ -192,20 +152,18 @@ daemon's own log (TUN, routing, DNS).
 
 ## Networking
 
-The plugin uses kernel TUN when `/dev/net/tun` exists and
-`--tun=userspace-networking` otherwise; it brings up loopback itself if the
-firmware did not. Both modes expose SOCKS5 on `127.0.0.1:1055` and HTTP
-CONNECT on `127.0.0.1:1056`.
+The plugin picks the networking mode supported by your device. If a device
+doesn't support kernel TUN, tailnet traffic from KOReader must go through the
+HTTP proxy.
 
-In userspace mode, tailnet traffic to KOReader must go through the HTTP
-proxy on port 1056: enable Automatically configure HTTP proxy in Plugin
-config, or set Settings → Network → Proxy to `http://127.0.0.1:1056` by
-hand. Exit-node routing applies only to traffic sent through the proxy in
-this mode.
+In userspace mode, enable Automatically configure HTTP proxy in Plugin config,
+or set Settings → Network → Proxy to `http://127.0.0.1:1056`. Exit-node routing
+in this mode applies only to traffic sent through the proxy.
 
-With kernel TUN, KOReader gets transparent tailnet routing for OPDS, progress
-sync, and Home Assistant. Either mode carries file sync via
+With kernel TUN, KOReader gets transparent tailnet routing. Either mode carries
+file sync via
 [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
+See the [platform notes](docs/platforms/README.md) for device-specific behavior.
 
 ## Development
 
