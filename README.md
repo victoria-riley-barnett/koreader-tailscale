@@ -229,11 +229,8 @@ sync, and Home Assistant. Either mode carries file sync via
 
 ## Credits
 
-Based on [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual),
-which this takes further with an in-app UI, step-by-step setup and a script that
-installs the binaries. MIT License.
+Fair credit to [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual),
+which this plugin is based on. MIT License.
 
-The [SSH](https://github.com/koreader/koreader) and
-[Syncthing](https://github.com/jasonchoimtt/koreader-syncthing) plugins are
-both excellent and play nicely with this one; this plugin only handles the
-network side.
+The SSH and [Syncthing](https://github.com/jasonchoimtt/koreader-syncthing)
+plugins are both excellent and play extremely nicely with this one.
