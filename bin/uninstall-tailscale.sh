@@ -18,7 +18,8 @@ if [ -d "$BIN_DIR" ]; then
     rm -f tailscale-* 2>/dev/null || true
 fi
 
-# Clean up tmp state (state dir, logs, tmpfs binary copies)
-rm -rf /tmp/tailscale 2>/dev/null || true
+# Clean up tmp state (state dir, logs, tmpfs binary copies, staged auth key).
+# Private state dirs outside bin/ are removed by Lua, which owns that list.
+rm -rf /tmp/tailscale /tmp/tailscale-auth 2>/dev/null || true
 
 exit 0
