@@ -1,8 +1,38 @@
 # Tailscale Plugin for KOReader
 
-Run [Tailscale](https://tailscale.com) on your e-reader from inside KOReader:
-the device joins your tailnet and gets a Tailscale IP for OPDS, progress sync,
-and file sync over the tailnet. Requires an ARMv7 or ARM64 device.
+It was really bothering me that I had to switch networks on my phone just to
+sync my Syncthing files, and checking which new IP my e-reader had picked up
+(for something like the Filebrowser plugin) was a lot of steps. This plugin
+fixes both: it runs [Tailscale](https://tailscale.com) on your e-reader from
+inside KOReader, so it slots right into your Syncthing, SSH or OPDS setup.
+
+- **Always reachable.** Your e-reader gets a permanent Tailscale IP, even when
+  it's on a different Wi-Fi network (home, work, café).
+- **No hassle.** Tailscale takes care of NAT traversal, so Syncthing, SSH and
+  friends just work from anywhere. It also gets around the local-network
+  requirement of many sync tools and services.
+
+Requires an ARMv7 or ARM64 device. Most testing has been on Kindle, with
+reports from Kobo and PocketBook users in the issues. Feedback and
+contributions are welcome.
+
+## How it works
+
+The full instructions are below. In short:
+
+1. Set up a Tailscale account (a [Headscale](https://headscale.net) server
+   works too).
+2. Download the plugin from the [releases page](../../releases) and copy
+   `tailscale.koplugin` into KOReader's `plugins` folder.
+3. Restart KOReader and tap Network → Tailscale VPN → Install/Update Tailscale.
+   It downloads the right binaries for your device and checks them before
+   installing.
+4. Sign in by scanning the QR code with your phone, or drop a reusable auth key
+   at `bin/auth.key`.
+
+For Syncthing, use the Tailscale IP in the device's Addresses field:
+`tcp://<tailscale-ip>:22000`. Any other service on the device (SSH, a file
+browser) is reached the same way, using the IP shown in Status.
 
 ## Installation
 
@@ -152,6 +182,14 @@ is usable does it fall back to `/tmp/tailscale`, copied back to `bin/` on stop.
 In that mode the auth key is also kept, because a crash would cost the node
 its identity.
 
+### Subnet routes
+
+Plugin config → Accept subnet routes (on by default) lets the device reach
+networks that a subnet router advertises to the tailnet. Turn it off if one
+of those routes covers the device's own LAN: accepted routes take priority
+over the local network, so the device stops answering on its LAN address
+while Tailscale is connected. Takes effect on the next start.
+
 ### Status and logs
 
 Status shows the device IP and connection info. Logs are written to
@@ -177,6 +215,17 @@ this mode.
 With kernel TUN, KOReader gets transparent tailnet routing for OPDS, progress
 sync, and Home Assistant. Either mode carries file sync via
 [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
+
+## Development
+
+- `sh tests/run.sh` runs the script smoke tests against fake binaries; CI also
+  runs a Lua syntax check and ShellCheck on every pull request.
+- A weekly workflow opens a PR bumping the pinned Tailscale release in
+  `bin/install-tailscale.sh`; CI verifies the pinned hashes against
+  pkgs.tailscale.com.
+- To release, run the **Release** workflow from the Actions tab with a version
+  such as `1.4.0`. It bumps `_meta.lua`, tags, and publishes the zip.
+  Pushing a `v*` tag by hand also works if `_meta.lua` already matches.
 
 ## Credits
 
