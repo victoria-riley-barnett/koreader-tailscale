@@ -175,7 +175,7 @@ function TailscalePlugin:autoStartTailscale()
     if UIManager._tailscale_autostart_done then
         return
     end
-    if not self:binariesExist() or self:isRunning() then
+    if not self:binariesExist() then
         return
     end
     UIManager._tailscale_autostart_done = true
@@ -183,7 +183,27 @@ function TailscalePlugin:autoStartTailscale()
         if not self:isRunning() then
             self:startDaemon()
         end
+        -- The launch path skips connectTailscale(), so nothing else would
+        -- apply the HTTP proxy once the node is connected (#52).
+        self:applyProxyWhenConnected(0)
     end)
+end
+
+--- Apply the auto HTTP proxy once the node reports Running, polling for a
+-- while because the daemon may still be coming up. Stops quietly if the user
+-- left Tailscale off.
+function TailscalePlugin:applyProxyWhenConnected(tries)
+    if not self.settings:readSetting("auto_http_proxy") then
+        return
+    end
+    self:invalidateBackendState()
+    if self:getBackendState() == "Running" then
+        self:enableHTTPProxyIfNeeded()
+    elseif tries < 20 then
+        UIManager:scheduleIn(3, function()
+            self:applyProxyWhenConnected(tries + 1)
+        end)
+    end
 end
 
 -- ─── path helpers ─────────────────────────────────────────────────
@@ -232,6 +252,18 @@ function TailscalePlugin:binariesExist()
 end
 
 function TailscalePlugin:hasNetwork()
+    -- A TCP connect needs no privileges. busybox ping needs root, which
+    -- KOReader does not have on PocketBook (#51), so ping is only a fallback.
+    local ok, socket = pcall(require, "socket")
+    if ok and socket then
+        for _, ip in ipairs({ "8.8.8.8", "1.1.1.1" }) do
+            local tcp = socket.tcp()
+            tcp:settimeout(3)
+            local connected = tcp:connect(ip, 53)
+            tcp:close()
+            if connected then return true end
+        end
+    end
     local h = io.popen("ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 && echo 'ok'")
     if not h then return false end
     local result = h:read("*a") or ""

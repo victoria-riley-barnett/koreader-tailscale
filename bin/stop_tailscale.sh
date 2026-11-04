@@ -8,6 +8,17 @@ cd "$BIN_DIR" 2>/dev/null || exit 0
 ./tailscaled -cleanup >/dev/null 2>&1 || true
 killall tailscaled 2>/dev/null || true
 
+# Remove the firewall rules start_tailscale.sh may have added for tailscale0.
+# Looped so duplicates from older starts are cleared too.
+for _ipt in iptables /usr/sbin/iptables /sbin/iptables; do
+    command -v "$_ipt" >/dev/null 2>&1 || continue
+    for _dir in "INPUT -i" "OUTPUT -o"; do
+        # shellcheck disable=SC2086
+        while "$_ipt" -D $_dir tailscale0 -j ACCEPT 2>/dev/null; do :; done
+    done
+    break
+done
+
 # killall sends SIGTERM asynchronously; wait for tailscaled to actually exit so it no longer
 # holds the filesystem busy (e.g. before KOReader enters USB storage mode). SIGKILL fallback.
 i=0

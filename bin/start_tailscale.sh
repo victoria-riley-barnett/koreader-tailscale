@@ -52,6 +52,26 @@ printf 'Tailscale networking mode: %s\n' "$NETWORK_MODE" > tailscaled.log
     --outbound-http-proxy-listen=127.0.0.1:1056 \
     >> tailscaled.log 2>&1 &
 
+# Kindle's firewall defaults to DROP, which silently discards everything that
+# arrives on or leaves through the TUN device. Only relevant to kernel TUN, and
+# only when a chain's default policy would drop the traffic. -C keeps repeated
+# starts from stacking duplicate rules; stop_tailscale.sh removes them.
+case "${TS_TUN_FLAG:-}" in
+    *tailscale0*)
+        for _ipt in iptables /usr/sbin/iptables /sbin/iptables; do
+            command -v "$_ipt" >/dev/null 2>&1 || continue
+            for _dir in "INPUT -i" "OUTPUT -o"; do
+                _chain=${_dir% *}
+                "$_ipt" -S "$_chain" 2>/dev/null | grep -q -- "-P $_chain DROP" || continue
+                # shellcheck disable=SC2086
+                "$_ipt" -C $_dir tailscale0 -j ACCEPT 2>/dev/null \
+                    || "$_ipt" -I $_dir tailscale0 -j ACCEPT 2>/dev/null || true
+            done
+            break
+        done
+        ;;
+esac
+
 # Launch path ends here. The daemon carries the node's own up/down state, which
 # is the thing that was worth resuming; everything below is the connect path and
 # would call `tailscale up`, forcing WantRunning=true over the user's choice.

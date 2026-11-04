@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so a stale pinned Tailscale hash is noticed even without commits.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq luajit shellcheck
+
+      - name: Lua syntax
+        run: luajit -bl main.lua > /dev/null && luajit -bl _meta.lua > /dev/null
+
+      - name: ShellCheck
+        run: shellcheck -s sh -S error bin/*.sh tests/run.sh
+
+      - name: Script tests
+        run: sh tests/run.sh
+
+  verify-pinned-hashes:
+    # The pinned release is what installs on devices without curl/GNU wget, so
+    # its hashes must match what Tailscale publishes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare pinned hashes with pkgs.tailscale.com
+        run: |
+          ver=$(sed -n 's/^TS_PINNED_VER="\(.*\)"/\1/p' bin/install-tailscale.sh)
+          status=0
+          for arch in arm arm64; do
+            want=$(sed -n "s/^TS_PINNED_SHA256_${arch}=\"\(.*\)\"/\1/p" bin/install-tailscale.sh)
+            got=$(curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${ver}_${arch}.tgz.sha256" | awk 'NR==1{print $1}')
+            if [ -n "$got" ] && [ "$want" = "$got" ]; then
+              echo "ok: ${ver} ${arch}"
+            else
+              echo "::error::pinned ${ver} ${arch} hash mismatch (pinned=$want published=$got)"
+              status=1
+            fi
+          done
+          exit $status

@@ -1,0 +1,53 @@
+name: Update pinned Tailscale release
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Look up latest stable release and hashes
+        id: latest
+        run: |
+          ver=$(curl -fsSL 'https://pkgs.tailscale.com/stable/?mode=json' \
+            | sed -n 's/.*"TarballsVersion"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p' | head -n1)
+          [ -n "$ver" ] || { echo "::error::could not read latest version"; exit 1; }
+          arm=$(curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${ver}_arm.tgz.sha256" | awk 'NR==1{print $1}')
+          arm64=$(curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${ver}_arm64.tgz.sha256" | awk 'NR==1{print $1}')
+          for h in "$arm" "$arm64"; do
+            case "$h" in *[!0-9a-f]*|"") echo "::error::bad hash '$h'"; exit 1 ;; esac
+            [ ${#h} -eq 64 ] || { echo "::error::bad hash length"; exit 1; }
+          done
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          echo "arm=$arm" >> "$GITHUB_OUTPUT"
+          echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
+
+      - name: Update the pin
+        run: |
+          f=bin/install-tailscale.sh
+          sed -i \
+            -e 's/^TS_PINNED_VER=.*/TS_PINNED_VER="${{ steps.latest.outputs.ver }}"/' \
+            -e 's/^TS_PINNED_SHA256_arm=.*/TS_PINNED_SHA256_arm="${{ steps.latest.outputs.arm }}"/' \
+            -e 's/^TS_PINNED_SHA256_arm64=.*/TS_PINNED_SHA256_arm64="${{ steps.latest.outputs.arm64 }}"/' \
+            "$f"
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/tailscale-pin
+          commit-message: "Pin Tailscale ${{ steps.latest.outputs.ver }}"
+          title: "Pin Tailscale ${{ steps.latest.outputs.ver }}"
+          body: |
+            Automated bump of the pinned Tailscale release used when no TLS-validating
+            downloader is available. Hashes come from the `.sha256` files published at
+            pkgs.tailscale.com; CI re-verifies them.
+          labels: dependencies
