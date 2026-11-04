@@ -48,14 +48,8 @@ browser) is reached the same way, using the IP shown in Status.
 
 The download is about 57 MB. Do not close KOReader during installation.
 
-Every download is checked against a SHA-256 before anything is installed, and a
-mismatch installs nothing. Most e-readers only have busybox `wget`, which does
-not validate TLS certificates, so the source of that hash matters:
-
-- With `curl` or GNU Wget (both validate TLS), the installer fetches the latest
-  release and checks it against the `.sha256` Tailscale publishes beside it.
-- Otherwise it installs the release pinned in `bin/install-tailscale.sh`, checked
-  against the hash pinned there. It never replaces a newer install with the pin.
+The installer checks every download against a SHA-256 and installs nothing if
+it doesn't match.
 
 ### Manual installation
 
