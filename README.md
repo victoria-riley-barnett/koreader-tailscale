@@ -48,9 +48,6 @@ browser) is reached the same way, using the IP shown in Status.
 
 The download is about 57 MB. Do not close KOReader during installation.
 
-The installer checks every download against a SHA-256 and installs nothing if
-it doesn't match.
-
 ### Manual installation
 
 If the automatic installation fails, install the binaries by hand. The
