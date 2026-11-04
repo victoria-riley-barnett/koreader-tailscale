@@ -152,6 +152,14 @@ is usable does it fall back to `/tmp/tailscale`, copied back to `bin/` on stop.
 In that mode the auth key is also kept, because a crash would cost the node
 its identity.
 
+### Subnet routes
+
+Plugin config → Accept subnet routes (on by default) lets the device reach
+networks that a subnet router advertises to the tailnet. Turn it off if one
+of those routes covers the device's own LAN: accepted routes take priority
+over the local network, so the device stops answering on its LAN address
+while Tailscale is connected. Takes effect on the next start.
+
 ### Status and logs
 
 Status shows the device IP and connection info. Logs are written to
