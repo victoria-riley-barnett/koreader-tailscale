@@ -1,8 +1,38 @@
 # Tailscale Plugin for KOReader
 
-Run [Tailscale](https://tailscale.com) on your e-reader from inside KOReader:
-the device joins your tailnet and gets a Tailscale IP for OPDS, progress sync,
-and file sync over the tailnet. Requires an ARMv7 or ARM64 device.
+It was really bothering me that I had to switch networks on my phone just to
+sync my Syncthing files, and checking which new IP my e-reader had picked up
+(for something like the Filebrowser plugin) was a lot of steps. This plugin
+fixes both: it runs [Tailscale](https://tailscale.com) on your e-reader from
+inside KOReader, so it slots right into your Syncthing, SSH or OPDS setup.
+
+- **Always reachable.** Your e-reader gets a permanent Tailscale IP, even when
+  it's on a different Wi-Fi network (home, work, café).
+- **No hassle.** Tailscale takes care of NAT traversal, so Syncthing, SSH and
+  friends just work from anywhere. It also gets around the local-network
+  requirement of many sync tools and services.
+
+Requires an ARMv7 or ARM64 device. Most testing has been on Kindle, with
+reports from Kobo and PocketBook users in the issues. Feedback and
+contributions are welcome.
+
+## How it works
+
+The full instructions are below. In short:
+
+1. Set up a Tailscale account (a [Headscale](https://headscale.net) server
+   works too).
+2. Download the plugin from the [releases page](../../releases) and copy
+   `tailscale.koplugin` into KOReader's `plugins` folder.
+3. Restart KOReader and tap Network → Tailscale VPN → Install/Update Tailscale.
+   It downloads the right binaries for your device and checks them before
+   installing.
+4. Sign in by scanning the QR code with your phone, or drop a reusable auth key
+   at `bin/auth.key`.
+
+For Syncthing, use the Tailscale IP in the device's Addresses field:
+`tcp://<tailscale-ip>:22000`. Any other service on the device (SSH, a file
+browser) is reached the same way, using the IP shown in Status.
 
 ## Installation
 
@@ -199,4 +229,11 @@ sync, and Home Assistant. Either mode carries file sync via
 
 ## Credits
 
-Based on [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual). MIT License.
+Based on [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual),
+which this takes further with an in-app UI, step-by-step setup and a script that
+installs the binaries. MIT License.
+
+The [SSH](https://github.com/koreader/koreader) and
+[Syncthing](https://github.com/jasonchoimtt/koreader-syncthing) plugins are
+both excellent and play nicely with this one; this plugin only handles the
+network side.
