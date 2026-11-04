@@ -229,8 +229,4 @@ sync, and Home Assistant. Either mode carries file sync via
 
 ## Credits
 
-Fair credit to [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual),
-which this plugin is based on. MIT License.
-
-The SSH and [Syncthing](https://github.com/jasonchoimtt/koreader-syncthing)
-plugins are both excellent and play extremely nicely with this one.
+Inspired by [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual), our .sh tailscale access is essentially the same. MIT License.
