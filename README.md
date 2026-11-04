@@ -7,7 +7,7 @@ inside KOReader, so it slots right into your Syncthing, SSH or OPDS setup.
 - **Always reachable.** Your e-reader gets a permanent Tailscale IP, even when it's on a different Wi-Fi network (home, work, café).
 - **No hassle.** Tailscale takes care of NAT traversal, so Syncthing, SSH, etc just work from anywhere.
 
-Most testing has been on Kindle, but we are able to generally implement fixes (as this is just file path variety). 
+Most testing has been on Kindle, but we are able to generally implement platform fixes (as this is mostly file path variety or service swaps).
 
 Feedback and contributions are welcome, create an [Issue](https://github.com/victoria-riley-barnett/koreader-tailscale/issues) if you run into any problems <3
 
