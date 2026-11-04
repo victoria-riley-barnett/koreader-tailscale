@@ -67,7 +67,7 @@ If the automatic installation fails, install the binaries by hand.
 
 3. Start Tailscale from the plugin menu and sign in.
 
-### Sign in
+## Sign in
 - **Scan QR code** — shows a sign-in QR for pairing a new Tailscale device. Scan it with your phone to finish the approval process on Tailscale.
 - Alternatively, **Use an auth key** — place a key in the plugin's `bin/auth.key` file and tap "Check again".
 
@@ -75,31 +75,29 @@ See the [platform notes](docs/platforms/README.md) for file path considerations.
 
 - Finally, you can go to Network setup → **Control plane** to enter the URL of a self-hosted Headscale server.
 
-### Exit node
+## Networking
+
+The plugin picks the networking mode supported by your device. If a device doesn't support kernel TUN, tailnet traffic from KOReader must go through the HTTP proxy.
+
+### Exit nodes
 
 Plugin config → Exit node: pick a node from the list or enter one manually. This applies on the next restart, which can be triggered by disconnecting in plugin & then reconnecting.
 
 ### HTTP proxy
 
-Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects and restores the previous
-setting on disconnect.
+Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects and restores the previous setting on disconnect.
 
-### Force userspace mode
+### userspace mode
 
 Plugin config → Force userspace mode selects the alternate networking mode; use it when kernel TUN is unstable on your device. Takes effect on the next start.
-
-### Subnet routes
-
-Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next start.
-
-
-## Networking
-
-The plugin picks the networking mode supported by your device. If a device doesn't support kernel TUN, tailnet traffic from KOReader must go through the HTTP proxy.
 
 In userspace mode, enable Automatically configure HTTP proxy in Plugin config, or set Settings → Network → Proxy to `http://127.0.0.1:1056`. Exit-node routing in this mode applies only to traffic sent through the proxy.
 
 With kernel TUN, KOReader gets transparent tailnet routing. Either mode carries file sync via [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
+
+### Subnet routes
+
+Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next start.
 
 See the [platform notes](docs/platforms/README.md) for device-specific behavior.
 
