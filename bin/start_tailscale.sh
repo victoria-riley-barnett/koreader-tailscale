@@ -95,9 +95,19 @@ fi
 # Run in the background: without an auth key `tailscale up` blocks waiting for
 # interactive login. The plugin polls `tailscale status --json` for login state.
 # The staged key is deleted as soon as `up` returns, whatever the outcome.
+# On the tmpfs fallback, state is persisted right after a successful `up` so a
+# one-time auth key is not lost to a crash or reboot before the next stop. Only
+# the fallback marker allows this: elsewhere it would copy the node's private
+# keys back onto USB-exported storage.
 (
     ./tailscale "$@" < /dev/null > tailscale.log 2>&1
+    _up_rc=$?
     [ -n "$TS_AUTH_KEY_FILE" ] && rm -f "$TS_AUTH_KEY_FILE"
+    if [ "$_up_rc" -eq 0 ] && [ -f "$STATEDIR/.copy_back_to_bin" ]; then
+        for f in tailscaled.state tailscaled.log.conf; do
+            [ -f "$STATEDIR/$f" ] && cp -f "$STATEDIR/$f" "$BIN_DIR/$f" 2>/dev/null
+        done
+    fi
 ) &
 
 exit 0
