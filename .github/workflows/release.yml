@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 1.3.1 (bumps _meta.lua, tags, publishes)'
+        required: true
+        type: string
 
 jobs:
   release:
@@ -13,10 +19,43 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq luajit
+
+      - name: Run checks
+        run: |
+          luajit -bl main.lua > /dev/null
+          sh tests/run.sh
+
+      - name: Bump version and tag (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::version must look like 1.2.3"; exit 1 ;;
+          esac
+          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag v${VERSION} already exists"; exit 1
+          fi
+          sed -i "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" _meta.lua
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD "v${VERSION}"
+          echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Resolve tag
+        if: github.event_name == 'push'
+        run: echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
 
       - name: Verify version matches tag
         run: |
-          TAG="${GITHUB_REF_NAME}"
           META_VER=$(grep -o '"[0-9][^"]*"' _meta.lua | tr -d '"' | head -1)
           if [ "v${META_VER}" != "${TAG}" ]; then
             echo "Tag ${TAG} does not match _meta.lua version ${META_VER}"
@@ -25,14 +64,13 @@ jobs:
 
       - name: Build zip
         run: |
-          TAG="${GITHUB_REF_NAME}"
           ZIP="tailscale.koplugin-${TAG}.zip"
           mkdir -p /tmp/build/tailscale.koplugin
           # Ship only the plugin: main.lua, _meta.lua, bin/. Keep in sync with
           # the payload list in deploy.sh.
           rsync -a \
             --exclude='.git' --exclude='.claude' --exclude='.github' \
-            --exclude='test.sh' --exclude='deploy.sh' \
+            --exclude='tests' --exclude='test.sh' --exclude='deploy.sh' \
             --exclude='*.md' --exclude='*.zip' --exclude='LICENSE' \
             --exclude='.gitignore' \
             . /tmp/build/tailscale.koplugin/
@@ -44,7 +82,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           ZIP="tailscale.koplugin-${TAG}.zip"
           gh release create "${TAG}" "${ZIP}" \
             --title "${TAG}" \

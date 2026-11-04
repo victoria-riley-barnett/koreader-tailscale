@@ -186,6 +186,17 @@ With kernel TUN, KOReader gets transparent tailnet routing for OPDS, progress
 sync, and Home Assistant. Either mode carries file sync via
 [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
 
+## Development
+
+- `sh tests/run.sh` runs the script smoke tests against fake binaries; CI also
+  runs a Lua syntax check and ShellCheck on every pull request.
+- A weekly workflow opens a PR bumping the pinned Tailscale release in
+  `bin/install-tailscale.sh`; CI verifies the pinned hashes against
+  pkgs.tailscale.com.
+- To release, run the **Release** workflow from the Actions tab with a version
+  such as `1.4.0`. It bumps `_meta.lua`, tags, and publishes the zip.
+  Pushing a `v*` tag by hand also works if `_meta.lua` already matches.
+
 ## Credits
 
 Based on [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual). MIT License.
