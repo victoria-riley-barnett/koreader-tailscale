@@ -86,6 +86,61 @@ start TS_TUN_FLAG=--tun=userspace-networking
     || fail "iptables touched in userspace mode"
 rm -rf "$T"
 
+# Taildrop receiver: its own fake `tailscale file get --loop`, which never
+# returns on its own (matching the real --loop) until it is sent SIGTERM.
+new_taildrop_sandbox() {
+    T=$(mktemp -d)
+    mkdir -p "$T/bin"
+    cp "$ROOT/bin/start_taildrop.sh" "$ROOT/bin/stop_taildrop.sh" "$T/bin/"
+    cat > "$T/bin/tailscale" <<'EOF'
+#!/bin/sh
+if [ "$1" = file ] && [ "$2" = get ]; then
+    echo started >> "$(dirname "$0")/taildrop.calls"
+    trap 'echo stopped >> "$(dirname "$0")/taildrop.calls"; exit 0' TERM
+    while :; do sleep 0.2; done
+fi
+exit 0
+EOF
+    chmod +x "$T/bin/tailscale"
+}
+
+new_taildrop_sandbox
+TS_BIN="$T/bin" TAILDROP_DIR="$T/home/taildrop" sh "$T/bin/start_taildrop.sh"
+sleep 0.3
+[ -d "$T/home/taildrop" ] && pass "taildrop target dir created" \
+    || fail "taildrop target dir not created"
+[ -f "$T/bin/taildrop.pid" ] && pass "taildrop pid file written" \
+    || fail "taildrop pid file missing"
+[ "$(grep -c started "$T/bin/taildrop.calls" 2>/dev/null)" = 1 ] \
+    && pass "taildrop receiver started once" \
+    || fail "taildrop receiver start count wrong"
+
+# Idempotent: a second start while one is already running must not spawn another.
+TS_BIN="$T/bin" TAILDROP_DIR="$T/home/taildrop" sh "$T/bin/start_taildrop.sh"
+sleep 0.2
+[ "$(grep -c started "$T/bin/taildrop.calls" 2>/dev/null)" = 1 ] \
+    && pass "second start is a no-op while receiver is running" \
+    || fail "second start spawned a duplicate receiver"
+
+TS_BIN="$T/bin" sh "$T/bin/stop_taildrop.sh"
+sleep 0.3
+[ ! -f "$T/bin/taildrop.pid" ] && pass "taildrop pid file removed on stop" \
+    || fail "taildrop pid file left behind after stop"
+[ "$(grep -c stopped "$T/bin/taildrop.calls" 2>/dev/null)" = 1 ] \
+    && pass "taildrop receiver stopped" \
+    || fail "taildrop receiver not stopped"
+rm -rf "$T"
+
+# stop_taildrop.sh never touches tailscaled's own PID/marker files, and is a
+# no-op when no receiver is tracked.
+new_taildrop_sandbox
+if TS_BIN="$T/bin" sh "$T/bin/stop_taildrop.sh"; then
+    pass "stop_taildrop.sh is a clean no-op with nothing tracked"
+else
+    fail "stop_taildrop.sh failed with nothing tracked"
+fi
+rm -rf "$T"
+
 if [ "$FAILS" -eq 0 ]; then
     echo "all passed"
 else

@@ -133,6 +133,13 @@ function TailscalePlugin:installUSBMSHook()
                 os.execute("TS_BIN=" .. TailscalePlugin:shellQuote(ts_bin) .. " sh "
                     .. TailscalePlugin:shellQuote(plugin_dir .. "/bin/stop_tailscale.sh"))
             end
+            -- <home>/taildrop usually sits on the very filesystem being exported
+            -- (it is the KOReader home folder), so the receiver has to let go of
+            -- it too. Own PID file, own stop script: never touches tailscaled's.
+            -- Always attempted, not gated on the pgrep check above, since it
+            -- tracks itself independently of tailscaled's running state.
+            os.execute("TS_BIN=" .. TailscalePlugin:shellQuote(ts_bin) .. " sh "
+                .. TailscalePlugin:shellQuote(plugin_dir .. "/bin/stop_taildrop.sh"))
         end
         return orig_quit(uimgr, exit_code, ...)
     end
@@ -186,6 +193,7 @@ function TailscalePlugin:autoStartTailscale()
         -- The launch path skips connectTailscale(), so nothing else would
         -- apply the HTTP proxy once the node is connected (#52).
         self:applyProxyWhenConnected(0)
+        self:startTaildropWhenConnected(0)
     end)
 end
 
@@ -202,6 +210,22 @@ function TailscalePlugin:applyProxyWhenConnected(tries)
     elseif tries < 20 then
         UIManager:scheduleIn(3, function()
             self:applyProxyWhenConnected(tries + 1)
+        end)
+    end
+end
+
+--- Start the Taildrop auto-receiver once the node reports Running. Same
+-- polling shape as applyProxyWhenConnected (the daemon may still be coming
+-- up on the launch path), but unconditional: unlike the HTTP proxy this has
+-- no settings-menu toggle to check, since it is meant to need no interaction
+-- beyond starting Tailscale.
+function TailscalePlugin:startTaildropWhenConnected(tries)
+    self:invalidateBackendState()
+    if self:getBackendState() == "Running" then
+        self:startTaildropReceiver()
+    elseif tries < 20 then
+        UIManager:scheduleIn(3, function()
+            self:startTaildropWhenConnected(tries + 1)
         end)
     end
 end
@@ -847,6 +871,7 @@ function TailscalePlugin:onLoginComplete()
         signed_in_interactively = true
     end
     self:enableHTTPProxyIfNeeded()
+    self:startTaildropReceiver()
     if self._up_auth_key_file and self:forgetAuthKey() then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale connected.\nThe auth key was deleted from the device; it is no longer needed."),
@@ -1247,6 +1272,66 @@ function TailscalePlugin:runInstallation()
 end
 
 
+-- ─── taildrop (auto-receive) ───────────────────────────────────────
+
+--- KOReader's own home/library folder — a user-configured "home_dir" setting
+-- first, then the device default — resolved the same way the file manager
+-- does it (filemanagerutil.getHomeFolder). This is deliberately not
+-- self.plugin_dir/self.ts_dir: those are the plugin's own storage, not the
+-- user's library folder, and files dropped there would be hidden from the
+-- file manager the user actually browses with. nil when no home folder can
+-- be resolved (e.g. on a KOReader build old enough to lack the setting and
+-- without a device default), so callers can skip starting the receiver.
+function TailscalePlugin:getHomeFolder()
+    local ok, filemanagerutil = pcall(require, "apps/filemanager/filemanagerutil")
+    local home
+    if ok and filemanagerutil and filemanagerutil.getHomeFolder then
+        home = filemanagerutil.getHomeFolder()
+    else
+        home = (G_reader_settings and G_reader_settings:readSetting("home_dir"))
+            or (Device and Device.home_dir)
+    end
+    if not home or home == "" or home == "." then
+        return nil
+    end
+    return home
+end
+
+function TailscalePlugin:getTaildropDir()
+    local home = self:getHomeFolder()
+    if not home then return nil end
+    return home .. "/taildrop"
+end
+
+function TailscalePlugin:ensureTaildropDir(dir)
+    return run("mkdir -p " .. self:shellQuote(dir) .. " 2>/dev/null")
+end
+
+--- Launch `tailscale file get --loop --conflict=rename` against <home>/taildrop
+-- in the background. Tracked by its own PID file in ts_bin (taildrop.pid),
+-- kept separate from tailscaled's own process management so stopping one
+-- never races the other during a USB storage mode transition. The script is
+-- idempotent: it leaves an already-running receiver alone.
+function TailscalePlugin:startTaildropReceiver()
+    if not self:binariesExist() then return end
+    local dir = self:getTaildropDir()
+    if not dir then
+        logger.warn("Tailscale: could not resolve a home folder; not starting Taildrop auto-receive")
+        return
+    end
+    if not self:ensureTaildropDir(dir) then
+        logger.warn("Tailscale: could not create " .. dir .. "; not starting Taildrop auto-receive")
+        return
+    end
+    os.execute("TS_BIN=" .. self:shellQuote(self.ts_bin) .. " TAILDROP_DIR=" .. self:shellQuote(dir)
+        .. " sh " .. self:shellQuote(self.plugin_dir .. "/bin/start_taildrop.sh"))
+end
+
+function TailscalePlugin:stopTaildropReceiver()
+    os.execute("TS_BIN=" .. self:shellQuote(self.ts_bin) .. " sh "
+        .. self:shellQuote(self.plugin_dir .. "/bin/stop_taildrop.sh"))
+end
+
 -- ─── connect / disconnect ─────────────────────────────────────────
 
 function TailscalePlugin:connectTailscale()
@@ -1301,6 +1386,7 @@ end
 
 function TailscalePlugin:disconnectTailscale()
     self:execStopScript()
+    self:stopTaildropReceiver()
     self:invalidateBackendState()
     self:restoreHTTPProxyBackup()
     UIManager:show(InfoMessage:new{ text = _("Tailscale disconnected"), timeout = 2 })
@@ -1549,6 +1635,9 @@ function TailscalePlugin:uninstallTailscale()
         text = _("Uninstalling Tailscale..."),
         timeout = 2,
     })
+    -- The uninstall script removes the `tailscale` binary the receiver runs,
+    -- so stop it first rather than leave an orphaned process behind.
+    self:stopTaildropReceiver()
     self:execUninstallScript()
     -- The script only knows bin/ and /tmp; the private state dirs are ours.
     for _, dir in ipairs(PRIVATE_STATE_DIRS) do
