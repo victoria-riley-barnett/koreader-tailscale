@@ -41,7 +41,7 @@ jobs:
             "$f"
 
       - name: Open pull request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: automation/tailscale-pin
           commit-message: "Pin Tailscale ${{ steps.latest.outputs.ver }}"
