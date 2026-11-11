@@ -95,6 +95,10 @@ In userspace mode, enable Automatically configure HTTP proxy in Plugin config, o
 
 With kernel TUN, KOReader gets transparent tailnet routing. Either mode carries file sync via [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
 
+### Taildrop
+
+Files sent to the device via [Taildrop](https://tailscale.com/kb/1106/taildrop) are accepted automatically and land in a `taildrop` folder inside KOReader's home folder — no setup beyond starting Tailscale. A same-named file is kept, not overwritten: the incoming file is saved under a new, number-suffixed name. The receiver starts once Tailscale connects and stops whenever Tailscale does, including around USB storage mode.
+
 ### Subnet routes
 
 Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next start.
