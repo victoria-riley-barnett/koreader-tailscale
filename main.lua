@@ -625,6 +625,7 @@ function TailscalePlugin:getStartEnvironment(state_dir)
     -- All decisions are made here in Lua and passed to the shell via env vars.
     local env = "TS_BIN=" .. self:shellQuote(self.ts_bin)
         .. " TS_STATEDIR=" .. self:shellQuote(state_dir)
+        .. " TS_LOGS_DIR=" .. self:shellQuote(state_dir)
         .. " TS_TUN_FLAG=" .. self:shellQuote(self._tun_flag or "")
         .. " TS_NETWORK_MODE=" .. self:shellQuote(self._network_mode or "unknown")
         .. " TS_UP_FLAGS=" .. self:shellQuote(self._up_flags or "")
