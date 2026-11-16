@@ -33,25 +33,11 @@ Feedback and contributions are welcome!
 
 ### Pointing services at the device
 
-Every service on the e-reader is reached the same way: by the address Tailscale
-gives it, not by whatever IP the local network handed out this week.
-
-For Syncthing, put the e-reader's Tailscale IP in the device's Addresses field
-on your other machines:
+Put the e-reader's `ip:port` in the address fields. An example from my [syncthing client](https://apps.apple.com/us/app/synctrain/id6553985316) (iOS):
 
 ```
-tcp://<tailscale-ip>:22000
+tcp://<tailscale-ip / magic-dns>:22000
 ```
-
-SSH, a file browser, or an OPDS server are configured identically, using the IP
-shown under Status.
-
-**Names vs. addresses.** From your laptop or phone you can usually use the
-device's MagicDNS name (`<device>.<tailnet>.ts.net`) instead of the IP. On the
-e-reader itself, the plugin runs `tailscaled` with `--accept-dns=false` so
-Tailscale cannot rewrite KOReader's resolver — which means the e-reader dials
-out to IP addresses, while everything else may dial the name. If a name does not
-resolve in one direction, use the IP.
 
 ## Installation
 
