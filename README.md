@@ -6,13 +6,14 @@ It was bothering me that I had to get my phone and Kindle onto the same network 
 
 Checking which new IP my e-reader had picked up (for something like the Filebrowser plugin), connecting this to some service (for a limited time, etc) was a lot of steps. 
 
-This plugin aims to fix both & did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, so it slots right into Syncthing, SSH or
-OPDS setups. Some users also use Headscale, support is newly added and may have limits.
+This plugin aims to fix both & did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, enabling [Syncthing](https://github.com/syncthing/syncthing), [SSH](https://github.com/koreader/koreader/wiki/SSH), and other file & library sync strategies. 
+
+Recently added support for Headscale, so some users can interface even more directly with their own services. I haven't set up my own yet, but there are setup examples in the [GH issues](https://github.com/victoria-riley-barnett/koreader-tailscale/issues), please create one if you have any problems.
 
 - **Always reachable.** Your e-reader gets a permanent Tailscale IP or Magic DNS, even when it's on a different Wi-Fi network (home, work, café)
 - **No hassle.** With a now more permanent identity, Syncthing, SSH, and other services:
-    - can do their work regardless of where your two devices are
-    - will be more reliable, and require less configuration (a great deal of potential opens up once you have both shell & file system access, take PuTTY for example)
+    - Can do their work regardless of where your two devices are
+    - Will be more reliable, and require less configuration (a great deal of potential opens up once you have both shell & file system access, ala [PuTTY](https://putty.org/index.html))
 
 Most testing has been on Kindle, but we are able to generally implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior. 
 
