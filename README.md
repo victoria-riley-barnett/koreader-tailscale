@@ -17,7 +17,7 @@ Recently added support for Headscale, so some users can interface even more dire
 
 Most testing has been on Kindle, but we are able to generally implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior. 
 
-Feedback and contributions are welcome — open an [Issue](https://github.com/victoria-riley-barnett/koreader-tailscale/issues) if you run into any problems <3
+Feedback and contributions are welcome!
 
 ## Setup
 
