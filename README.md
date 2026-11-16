@@ -154,12 +154,4 @@ is connected. Takes effect on the next start.
 Inspired by [mitanshu7/tailscale_kual](https://github.com/mitanshu7/tailscale_kual),
 our `.sh` access to Tailscale is essentially the same.
 
-The manual setup this plugin replaces has a longer tail: Anarcat's
-[notes on running Syncthing on a Kobo Clara HD](https://anarc.at/hardware/tablet/kobo-clara-hd/)
-and MrCarl's
-[My KOReader Syncthing Journey](https://www.mobileread.com/forums/showthread.php?t=359310)
-show why "put the binary on the device and forward a port" was the standard
-answer. Those setups work — they just leave you tracking IPs and keeping the
-WebGUI off the network. Retiring that last step is the point of this plugin.
-
 MIT License.
