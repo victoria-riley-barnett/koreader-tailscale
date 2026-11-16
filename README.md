@@ -1,32 +1,22 @@
 # Tailscale Plugin for KOReader
 
-A Tailscale client for KOReader, for cross-network syncing, SSH, and file
-sharing on e-readers.
+A Tailscale client for KOReader, for cross-network syncing, SSH, and file sharing on e-readers.
 
-It was bothering me that I had to get my phone and Kindle onto the same network
-just to sync my Syncthing files — and Syncthing is the key player in any open
-alternative that skips both cloud storage and the sync features bundled with
-library apps. Yes — we literally had to route around it from a layer above the
-filesystem :) Checking which new IP my e-reader had picked up (for something
-like the Filebrowser plugin) was a lot of steps, too.
+It was bothering me that I had to get my phone and Kindle onto the same network just to sync my Syncthing files (a key player in any open alternative that skips paid services or sync features locked in w/ library apps. 
 
-This plugin fixes both: it runs [Tailscale](https://tailscale.com) on your
-e-reader from inside KOReader, so it slots right into your Syncthing, SSH or
-OPDS setup.
+Checking which new IP my e-reader had picked up (for something like the Filebrowser plugin), connecting this to some service (for a limited time, etc) was a lot of steps. 
 
-- **Always reachable.** Your e-reader gets a permanent Tailscale IP, even when
-  it's on a different Wi-Fi network (home, work, café).
-- **No hassle.** Tailscale takes care of NAT traversal, so Syncthing, SSH, etc
-  just work from anywhere.
+This plugin aims to fix both & did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, so it slots right into Syncthing, SSH or
+OPDS setups. Some users also use Headscale, support is newly added and may have limits.
 
-Most testing has been on Kindle, but we are able to generally implement platform
-fixes (this is mostly file path variety or service swaps). See the
-[platform notes](docs/platforms/README.md) for device-specific paths and
-behavior.
+- **Always reachable.** Your e-reader gets a permanent Tailscale IP or Magic DNS, even when it's on a different Wi-Fi network (home, work, café)
+- **No hassle.** With a now more permanent identity, Syncthing, SSH, and other services:
+    - can do their work regardless of where your two devices are
+    - will be more reliable, and require less configuration (a great deal of potential opens up once you have both shell & file system access, take PuTTY for example)
 
-Feedback and contributions are welcome — open an
-[Issue](https://github.com/victoria-riley-barnett/koreader-tailscale/issues) if
-you run into any problems <3
+Most testing has been on Kindle, but we are able to generally implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior. 
+
+Feedback and contributions are welcome — open an [Issue](https://github.com/victoria-riley-barnett/koreader-tailscale/issues) if you run into any problems <3
 
 ## Setup
 
