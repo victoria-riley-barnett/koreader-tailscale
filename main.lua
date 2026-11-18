@@ -251,26 +251,6 @@ function TailscalePlugin:binariesExist()
     return result:match("yes") ~= nil
 end
 
-function TailscalePlugin:hasNetwork()
-    -- A TCP connect needs no privileges. busybox ping needs root, which
-    -- KOReader does not have on PocketBook (#51), so ping is only a fallback.
-    local ok, socket = pcall(require, "socket")
-    if ok and socket then
-        for _, ip in ipairs({ "8.8.8.8", "1.1.1.1" }) do
-            local tcp = socket.tcp()
-            tcp:settimeout(3)
-            local connected = tcp:connect(ip, 53)
-            tcp:close()
-            if connected then return true end
-        end
-    end
-    local h = io.popen("ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 && echo 'ok'")
-    if not h then return false end
-    local result = h:read("*a") or ""
-    h:close()
-    return result:match("ok") ~= nil
-end
-
 function TailscalePlugin:hasTunDevice()
     local h = io.popen("test -c /dev/net/tun && test -r /dev/net/tun && test -w /dev/net/tun && echo 'yes'")
     if not h then return false end
@@ -1258,14 +1238,10 @@ function TailscalePlugin:connectTailscale()
         })
         return
     end
-    if not self:hasNetwork() then
-        UIManager:show(InfoMessage:new{
-            text = _("No network connectivity.\nEnable WiFi before starting Tailscale."),
-            timeout = 6,
-        })
-        return
-    end
-
+    -- Do not preflight internet access here. Networks may block public DNS or
+    -- ICMP while still allowing Tailscale's control and relay traffic, and
+    -- tailscaled is designed to stay running and reconnect when connectivity
+    -- becomes available.
     -- Show a persistent message before the blocking call so the user knows
     -- why the UI is unresponsive while Tailscale is coming up.
     local starting_msg = InfoMessage:new{
