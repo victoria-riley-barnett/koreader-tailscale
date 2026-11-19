@@ -15,6 +15,15 @@ These are platform-specific paths used by common setups. The plugin may be
 installed in a different location if KOReader is configured to load plugins
 from elsewhere.
 
+## Taildrop
+
+Files sent via Taildrop are saved automatically to a `taildrop` folder inside
+KOReader's home folder — `/mnt/us/taildrop` on Kindle, `/mnt/onboard/taildrop`
+on Kobo, `/mnt/ext1/taildrop` on PocketBook (separate from the Tailscale
+binaries, which live under `/mnt/ext1/tailscale/`). If KOReader's home folder
+has been changed from the device default (file manager → long-press a folder
+→ "Set as home folder"), `taildrop` follows it there instead.
+
 ## Networking
 
 With kernel TUN, KOReader can reach tailnet services directly. In userspace
