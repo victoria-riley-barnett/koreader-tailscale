@@ -19,9 +19,10 @@ Place an auth key at `/mnt/ext1/tailscale/bin/auth.key`.
 
 ## Networking
 
-The plugin checks network availability with a TCP connection, which works
-without root privileges. Some PocketBook firmware versions do not allow
-KOReader's user account to run `ping`.
+The plugin does not require a separate internet-connectivity probe before
+starting Tailscale. `tailscaled` stays running and reconnects when connectivity
+becomes available, including on networks that block public DNS servers or
+ICMP.
 
 Networking mode is selected based on the device's available TUN support. If
 userspace mode is selected, configure KOReader's HTTP proxy as described in the
