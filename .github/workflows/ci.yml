@@ -21,6 +21,9 @@ jobs:
       - name: Lua syntax
         run: luajit -bl main.lua > /dev/null && luajit -bl _meta.lua > /dev/null
 
+      - name: Lua unit tests
+        run: luajit tests/unit.lua
+
       - name: ShellCheck
         run: shellcheck -s sh -S error bin/*.sh tests/run.sh
 

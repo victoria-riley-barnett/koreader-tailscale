@@ -26,3 +26,15 @@ Networking mode is selected automatically for each device. On Kindle models
 using kernel TUN, the plugin allows `tailscale0` traffic through firewall
 chains whose default policy is DROP. Other models may use userspace networking;
 in that mode, configure KOReader's HTTP proxy as described in the README.
+
+## SSH and logs
+
+Tailscale SSH host keys are generated in the private state directory:
+
+```text
+/var/local/koreader-tailscale/ssh/
+```
+
+Daemon and client logs (`tailscaled.log`, `tailscale.log`) also live in
+`/var/local/koreader-tailscale/`, not in the USB-exported plugin directory,
+because they can contain the login URL.

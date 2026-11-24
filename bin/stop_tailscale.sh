@@ -21,12 +21,13 @@ done
 
 # killall sends SIGTERM asynchronously; wait for tailscaled to actually exit so it no longer
 # holds the filesystem busy (e.g. before KOReader enters USB storage mode). SIGKILL fallback.
+# Four one-second steps, not twenty 0.2s ones: busybox `sleep` often rejects
+# fractional arguments, and the total wait and the 2s kill point are unchanged.
 i=0
-while pgrep tailscaled >/dev/null 2>&1; do
+while pgrep tailscaled >/dev/null 2>&1 && [ "$i" -lt 4 ]; do
     i=$((i+1))
-    [ "$i" -ge 10 ] && killall -9 tailscaled 2>/dev/null
-    [ "$i" -ge 20 ] && break
-    sleep 0.2
+    [ "$i" -ge 2 ] && killall -9 tailscaled 2>/dev/null
+    sleep 1
 done
 
 # Sync tmpfs state back to persistent storage so node identity survives

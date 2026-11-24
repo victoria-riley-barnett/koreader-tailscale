@@ -28,3 +28,16 @@ Networking mode is selected based on the device's available TUN support. If
 userspace mode is selected, configure KOReader's HTTP proxy as described in the
 README. You can also enable **Force userspace mode** in Plugin config if kernel
 TUN is unstable.
+
+## SSH and logs
+
+Tailscale SSH host keys and the logs live in the private state directory:
+
+```text
+/var/lib/koreader-tailscale/ssh/
+/var/lib/koreader-tailscale/logs/tailscaled.log
+/var/lib/koreader-tailscale/logs/tailscale.log
+```
+
+This is separate from the binaries at `/mnt/ext1/tailscale/bin/`, which stay on
+the exported partition.

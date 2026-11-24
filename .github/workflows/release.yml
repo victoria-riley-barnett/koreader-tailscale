@@ -28,6 +28,7 @@ jobs:
       - name: Run checks
         run: |
           luajit -bl main.lua > /dev/null
+          luajit tests/unit.lua
           sh tests/run.sh
 
       - name: Bump version and tag (manual runs)
@@ -45,7 +46,11 @@ jobs:
           sed -i "s/version = \"[^\"]*\"/version = \"${VERSION}\"/" _meta.lua
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release v${VERSION}"
+          # The version may already be bumped in the commit being released;
+          # don't fail the run with "nothing to commit" in that case.
+          if ! git diff --quiet -- _meta.lua; then
+            git commit -am "Release v${VERSION}"
+          fi
           git tag "v${VERSION}"
           git push origin HEAD "v${VERSION}"
           echo "TAG=v${VERSION}" >> "$GITHUB_ENV"
@@ -66,11 +71,10 @@ jobs:
         run: |
           ZIP="tailscale.koplugin-${TAG}.zip"
           mkdir -p /tmp/build/tailscale.koplugin
-          # Ship only the plugin: main.lua, _meta.lua, bin/. Keep in sync with
-          # the payload list in deploy.sh.
+          # Ship only the plugin: main.lua, _meta.lua, bin/.
           rsync -a \
             --exclude='.git' --exclude='.claude' --exclude='.github' \
-            --exclude='tests' --exclude='test.sh' --exclude='deploy.sh' \
+            --exclude='tests' \
             --exclude='*.md' --exclude='*.zip' --exclude='LICENSE' \
             --exclude='.gitignore' \
             . /tmp/build/tailscale.koplugin/

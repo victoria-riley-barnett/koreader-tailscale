@@ -81,6 +81,7 @@ function TailscalePlugin:init()
     self.settings:readSetting("http_proxy_backup_active", false)
     self.settings:readSetting("force_userspace", false)
     self.settings:readSetting("accept_routes", true)
+    self.settings:readSetting("tailscale_ssh", false)
 
     -- Sign-in UI is opt-in: set when the user asks for a QR code, cleared by
     -- the login poll once it has handed the code over.
@@ -98,6 +99,10 @@ function TailscalePlugin:init()
     if not self:resumeAfterUSBMS() then
         self:autoStartTailscale()
     end
+
+    -- A crash or a USBMS exit can leave KOReader's proxy pointing at a daemon
+    -- that is gone, which breaks networking even though Tailscale looks off.
+    self:reconcileHTTPProxy()
 end
 
 --- Stop Tailscale before KOReader enters USB storage mode, then auto-restart afterwards.
@@ -130,6 +135,9 @@ function TailscalePlugin:installUSBMSHook()
                     f:close()
                 end
                 -- Synchronous: the filesystem must be free before the USBMS tool unmounts it.
+                -- The HTTP proxy is deliberately left alone here: KOReader restarts
+                -- cold after USBMS, and init()'s reconcileHTTPProxy() then sees a
+                -- backup with no Running daemon and puts the user's proxy back.
                 os.execute("TS_BIN=" .. TailscalePlugin:shellQuote(ts_bin) .. " sh "
                     .. TailscalePlugin:shellQuote(plugin_dir .. "/bin/stop_tailscale.sh"))
             end
@@ -150,6 +158,10 @@ function TailscalePlugin:resumeAfterUSBMS()
     mf:close()
     os.remove(marker)
     logger.info("Tailscale plugin: restarting Tailscale after USB storage session")
+    -- Claim the autostart slot now, not inside the timer: FileManager and
+    -- ReaderUI can each instantiate the plugin, and a second one scheduled in
+    -- the same window would start a second daemon.
+    UIManager._tailscale_autostart_done = true
     -- Deferred so we don't block UI startup (start_tailscale.sh sleeps ~2s).
     UIManager:scheduleIn(2, function()
         self:connectTailscale()
@@ -225,11 +237,17 @@ function TailscalePlugin:getHeadscaleUrlPath()
 end
 
 function TailscalePlugin:getLogPath()
-    return self:getBinDir() .. "/tailscale.log"
+    return self:getLogDir() .. "/tailscale.log"
 end
 
 function TailscalePlugin:getDaemonLogPath()
-    return self:getBinDir() .. "/tailscaled.log"
+    return self:getLogDir() .. "/tailscaled.log"
+end
+
+--- Logs live inside the resolved state dir (tmpfs included) so a read-only
+-- rootfs still gets a writable home for them; bin/ may be on one.
+function TailscalePlugin:getLogDir()
+    return (self._state_dir or self:resolveStateDir()) .. "/logs"
 end
 
 -- ─── capability checks (Lua owns these, not shell) ────────────────
@@ -288,10 +306,16 @@ end
 --- Subnet routes default on, which is what the plugin has always passed. Off is
 -- for a subnet router that advertises the device's own LAN: tailscaled puts
 -- accepted routes ahead of the main table, so replies to LAN peers go into the
--- tunnel and the device drops off its own network. Takes effect on the next start.
+-- tunnel and the device drops off its own network. Takes effect on the next connect.
 function TailscalePlugin:acceptsRoutes()
     if not self.settings then return true end
     return self.settings:readSetting("accept_routes") ~= false
+end
+
+--- tailscaled's own SSH server on the tailnet, unrelated to KOReader's 2222.
+function TailscalePlugin:sshEnabled()
+    if not self.settings then return false end
+    return self.settings:readSetting("tailscale_ssh") and true or false
 end
 
 -- ─── state directory resolution (formerly shell logic) ────────────
@@ -414,7 +438,8 @@ function TailscalePlugin:resolveStateDir()
     -- bin/ is fine where it is private (reMarkable, Cervantes, ...).
     if bin_fs and not bin_shared and not isSharedFsType(bin_fs) and not isVolatileFsType(bin_fs) then
         os.remove(TMPFS_COPY_BACK_MARKER)
-        return self.ts_bin
+        self._state_dir = self.ts_bin
+        return self._state_dir
     end
 
     if bin_fs then
@@ -422,7 +447,8 @@ function TailscalePlugin:resolveStateDir()
             if self:preparePrivateDir(dir) then
                 os.remove(TMPFS_COPY_BACK_MARKER)
                 self:migrateStateOutOfBin(dir)
-                return dir
+                self._state_dir = dir
+                return self._state_dir
             end
         end
         logger.warn("Tailscale: no private state dir available; node keys will be copied back to " .. self.ts_bin)
@@ -434,7 +460,8 @@ function TailscalePlugin:resolveStateDir()
         os.execute("rm -f " .. test_file .. " 2>/dev/null")
         if usable then
             os.remove(TMPFS_COPY_BACK_MARKER)
-            return self.ts_bin
+            self._state_dir = self.ts_bin
+            return self._state_dir
         end
     end
 
@@ -444,14 +471,18 @@ function TailscalePlugin:resolveStateDir()
     os.execute("umask 077 && mkdir -p " .. tmpfs .. " 2>/dev/null")
     for _, f in ipairs(STATE_FILES) do
         local src = self:shellQuote(self.ts_bin .. "/" .. f)
-        os.execute("[ -f " .. src .. " ] && cp -f " .. src .. " " .. self:shellQuote(TMPFS_STATE_DIR .. "/" .. f)
-            .. " 2>/dev/null || true")
+        local dst = self:shellQuote(TMPFS_STATE_DIR .. "/" .. f)
+        -- Only seed tmpfs when empty: after a reboot the live state may still be
+        -- there and is newer than the bin/ copy stop_tailscale.sh made.
+        os.execute("[ -f " .. src .. " ] && { [ -f " .. dst .. " ] || cp -f " .. src .. " " .. dst
+            .. "; } 2>/dev/null || true")
     end
     local marker = io.open(TMPFS_COPY_BACK_MARKER, "w")
     if marker then
         marker:close()
     end
-    return TMPFS_STATE_DIR
+    self._state_dir = TMPFS_STATE_DIR
+    return self._state_dir
 end
 
 -- ─── loopback setup (formerly shell logic) ────────────────────────
@@ -535,12 +566,19 @@ function TailscalePlugin:resolveTunFlag()
     end
 end
 
+--- The flag set Lua owns. DNS is deliberately not here: start_tailscale.sh
+-- carries the daemon's stored CorpDNS value forward, so `tailscale set
+-- --accept-dns=...` sticks instead of being overridden by the plugin.
+function TailscalePlugin:networkingFlags()
+    local flags = self:acceptsRoutes() and "--accept-routes" or "--accept-routes=false"
+    flags = flags .. (self:sshEnabled() and " --ssh" or " --ssh=false")
+    return flags .. " --netfilter-mode=off"
+end
+
 function TailscalePlugin:buildUpCommand()
     -- Lua decides every flag and credential here; the executor only assembles
     -- the command line from the TS_* env vars it is handed.
-    -- Off is spelled out: `up` keeps the stored value of any flag left off.
-    local routes_flag = self:acceptsRoutes() and "--accept-routes" or "--accept-routes=false"
-    self._up_flags = routes_flag .. " --accept-dns=false --netfilter-mode=off"
+    self._up_flags = self:networkingFlags()
     self._up_auth_key = self:readAuthKey()
     self._up_headscale_url = self:readHeadscaleUrl()
 end
@@ -603,9 +641,12 @@ end
 
 function TailscalePlugin:getStartEnvironment(state_dir)
     -- All decisions are made here in Lua and passed to the shell via env vars.
+    -- Logs go under the state dir, which is the one place on a read-only
+    -- rootfs that is guaranteed writable (tmpfs included).
+    local logs_dir = state_dir and (state_dir .. "/logs") or self:getLogDir()
     local env = "TS_BIN=" .. self:shellQuote(self.ts_bin)
         .. " TS_STATEDIR=" .. self:shellQuote(state_dir)
-        .. " TS_LOGS_DIR=" .. self:shellQuote(state_dir)
+        .. " TS_LOGS_DIR=" .. self:shellQuote(logs_dir)
         .. " TS_TUN_FLAG=" .. self:shellQuote(self._tun_flag or "")
         .. " TS_NETWORK_MODE=" .. self:shellQuote(self._network_mode or "unknown")
         .. " TS_UP_FLAGS=" .. self:shellQuote(self._up_flags or "")
@@ -682,13 +723,31 @@ function TailscalePlugin:getNetworkManager()
     return nil
 end
 
+--- Compare proxy URLs the way the settings store writes them: trailing
+-- whitespace and slashes are not meaningful, and an empty value is "no proxy".
+local function sameProxy(a, b)
+    a = tostring(a or ""):gsub("%s+$", ""):gsub("/+$", "")
+    b = tostring(b or ""):gsub("%s+$", ""):gsub("/+$", "")
+    return a ~= "" and a == b
+end
+
 function TailscalePlugin:saveHTTPProxyBackup()
-    if self.settings:readSetting("http_proxy_backup_active") then
+    local active = self.settings:readSetting("http_proxy_backup_active")
+    local saved_value = self.settings:readSetting("http_proxy_backup_value") or ""
+    -- A backup that points at our own proxy is not the user's setting: it is a
+    -- leftover from a crash or an older build. Re-saving it as "off" is what
+    -- makes a later restore actually remove the proxy.
+    if active and not sameProxy(saved_value, self.http_proxy_url) then
         return
     end
 
-    self.settings:saveSetting("http_proxy_backup_enabled", G_reader_settings:readSetting("http_proxy_enabled") and true or false)
-    self.settings:saveSetting("http_proxy_backup_value", G_reader_settings:readSetting("http_proxy") or "")
+    local enabled = G_reader_settings:readSetting("http_proxy_enabled") and true or false
+    local value = G_reader_settings:readSetting("http_proxy") or ""
+    if sameProxy(value, self.http_proxy_url) then
+        enabled, value = false, ""
+    end
+    self.settings:saveSetting("http_proxy_backup_enabled", enabled)
+    self.settings:saveSetting("http_proxy_backup_value", value)
     self.settings:saveSetting("http_proxy_backup_active", true)
     self:flushSettings()
 end
@@ -738,6 +797,11 @@ function TailscalePlugin:restoreHTTPProxyBackup(silent)
 
     local backup_enabled = self.settings:readSetting("http_proxy_backup_enabled")
     local backup_value = self.settings:readSetting("http_proxy_backup_value") or ""
+    -- Older builds could save our own proxy as the "previous" value. Restoring
+    -- that would re-apply 1056, so treat it as "no proxy" instead.
+    if sameProxy(backup_value, self.http_proxy_url) then
+        backup_enabled, backup_value = false, ""
+    end
     local ok = pcall(function()
         if backup_enabled and backup_value ~= "" then
             network_mgr:setHTTPProxy(backup_value)
@@ -756,6 +820,31 @@ function TailscalePlugin:restoreHTTPProxyBackup(silent)
             text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
             timeout = 5
         })
+    end
+end
+
+--- A backup with no Running daemon behind it means the proxy outlived the
+-- connection (crash, USBMS exit, uninstall). Undo it so KOReader is not left
+-- sending every request to a port nothing listens on.
+function TailscalePlugin:reconcileHTTPProxy()
+    if not self.settings or not self.settings:readSetting("http_proxy_backup_active") then
+        return
+    end
+    -- KOReader no longer has our proxy enabled: the backup is stale (the user
+    -- turned the proxy off). Forget it rather than restoring a value that is
+    -- not in use.
+    local enabled = G_reader_settings and G_reader_settings:readSetting("http_proxy_enabled") and true or false
+    local current = G_reader_settings and G_reader_settings:readSetting("http_proxy") or ""
+    if not enabled or not sameProxy(current, self.http_proxy_url) then
+        self.settings:saveSetting("http_proxy_backup_active", false)
+        self.settings:delSetting("http_proxy_backup_enabled")
+        self.settings:delSetting("http_proxy_backup_value")
+        self:flushSettings()
+        return
+    end
+    self:invalidateBackendState()
+    if self:getBackendState() ~= "Running" then
+        self:restoreHTTPProxyBackup(true)
     end
 end
 
@@ -1121,13 +1210,27 @@ function TailscalePlugin:addToMainMenu(menu_items)
                     {
                         text = _("Automatically configure HTTP proxy"),
                         keep_menu_open = true,
+                        help_text = _("Needed for userspace networking; kernel TUN needs no proxy.\nApplies now, and is restored on disconnect or uninstall."),
                         checked_func = function()
                             return self.settings and self.settings:readSetting("auto_http_proxy")
                         end,
                         callback = function(touchmenu_instance)
-                            self.settings:saveSetting("auto_http_proxy",
-                                not self.settings:readSetting("auto_http_proxy"))
+                            local enable = not self.settings:readSetting("auto_http_proxy")
+                            self.settings:saveSetting("auto_http_proxy", enable)
                             self:flushSettings()
+                            if enable then
+                                -- Only touch the proxy when the node is up;
+                                -- otherwise the connect path applies it when the
+                                -- backend reaches Running.
+                                self:invalidateBackendState()
+                                if self:getBackendState() == "Running" then
+                                    self:enableHTTPProxyIfNeeded()
+                                end
+                            else
+                                -- Turning the setting off must undo the proxy it
+                                -- installed, not wait for a disconnect.
+                                self:restoreHTTPProxyBackup(true)
+                            end
                             if touchmenu_instance and touchmenu_instance.updateItems then
                                 touchmenu_instance:updateItems()
                             end
@@ -1156,6 +1259,21 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         end,
                         callback = function(touchmenu_instance)
                             self.settings:saveSetting("accept_routes", not self:acceptsRoutes())
+                            self:flushSettings()
+                            if touchmenu_instance and touchmenu_instance.updateItems then
+                                touchmenu_instance:updateItems()
+                            end
+                        end
+                    },
+                    {
+                        text = _("Enable Tailscale SSH"),
+                        keep_menu_open = true,
+                        help_text = _("Runs tailscaled's SSH server on port 22 over the tailnet.\nIndependent of KOReader's own SSH server on 2222.\nTakes effect on the next connect."),
+                        checked_func = function()
+                            return self:sshEnabled()
+                        end,
+                        callback = function(touchmenu_instance)
+                            self.settings:saveSetting("tailscale_ssh", not self:sshEnabled())
                             self:flushSettings()
                             if touchmenu_instance and touchmenu_instance.updateItems then
                                 touchmenu_instance:updateItems()
@@ -1277,13 +1395,60 @@ function TailscalePlugin:connectTailscale()
 end
 
 function TailscalePlugin:disconnectTailscale()
+    -- The poll would otherwise keep running against a daemon we just killed
+    -- and could hand out a QR code for a connection that no longer exists.
+    self:stopLoginPolling()
     self:execStopScript()
     self:invalidateBackendState()
     self:restoreHTTPProxyBackup()
     UIManager:show(InfoMessage:new{ text = _("Tailscale disconnected"), timeout = 2 })
 end
 
+--- Dispatcher entry point: the same decision as the connection row, with no
+-- menu to update afterwards.
+function TailscalePlugin:onToggleTailscale()
+    self:invalidateBackendState()
+    if self:getBackendState() == "Running" then
+        self:disconnectTailscale()
+    else
+        self:connectTailscale()
+    end
+    return true
+end
+
 -- ─── status ───────────────────────────────────────────────────────
+
+--- Status lines from `tailscale status --json`, or nil when the blob cannot be
+-- read at all. A non-empty but undecodable body must return nil too: callers
+-- fall back to `tailscale ip`, and a silent empty summary used to hide the
+-- addresses exactly when parsing was the thing that failed.
+function TailscalePlugin:summaryFromStatusJSON(raw)
+    if not raw or raw == "" then return nil end
+    local ok, parsed = pcall(function() return json.decode(raw) end)
+    if not ok or type(parsed) ~= "table" then return nil end
+
+    local lines = { "State: " .. tostring(parsed.BackendState or "Unknown") }
+    local self_info = parsed.Self
+    if type(self_info) == "table" then
+        -- Newer daemons expose TailscaleIPs as a method rather than a field.
+        local ips = self_info.TailscaleIPs
+        if type(ips) == "function" then
+            local ok2, result = pcall(ips)
+            ips = ok2 and result or nil
+        end
+        if type(ips) == "table" and #ips > 0 then
+            local parts = {}
+            for _, ip in ipairs(ips) do
+                parts[#parts + 1] = tostring(ip)
+            end
+            lines[#lines + 1] = "IPs: " .. table.concat(parts, ", ")
+        end
+        if self_info.HostName then
+            lines[#lines + 1] = "Device: " .. tostring(self_info.HostName)
+        end
+    end
+    return lines
+end
 
 function TailscalePlugin:showStatus()
     if not self:binariesExist() then
@@ -1305,32 +1470,10 @@ function TailscalePlugin:showStatus()
     local jraw = h:read("*a") or ""
     h:close()
 
-    local function join(tbl, sep)
-        local s = ""
-        for i, v in ipairs(tbl) do
-            s = s .. (i > 1 and sep or "") .. tostring(v)
-        end
-        return s
-    end
-
-    if jraw ~= "" then
-        local ok, parsed = pcall(function() return json.decode(jraw) end)
-        if ok and type(parsed) == "table" then
-            table.insert(lines, "State: " .. (parsed.BackendState or "Unknown"))
-            if parsed.Self and type(parsed.Self) == "table" then
-                local ips = parsed.Self.TailscaleIPs or {}
-                if type(ips) == "table" and #ips > 0 then
-                    table.insert(lines, "IPs: " .. join(ips, ", "))
-                elseif type(ips) == "function" then
-                    local ok2, result = pcall(ips)
-                    if ok2 and type(result) == "table" and #result > 0 then
-                        table.insert(lines, "IPs: " .. join(result, ", "))
-                    end
-                end
-                if parsed.Self.HostName then
-                    table.insert(lines, "Device: " .. tostring(parsed.Self.HostName))
-                end
-            end
+    local summary = self:summaryFromStatusJSON(jraw)
+    if summary then
+        for _, line in ipairs(summary) do
+            table.insert(lines, line)
         end
     else
         -- Fallback to terse commands
@@ -1526,6 +1669,9 @@ function TailscalePlugin:uninstallTailscale()
         text = _("Uninstalling Tailscale..."),
         timeout = 2,
     })
+    -- Nothing must be left polling or proxying once the binaries are gone.
+    self:stopLoginPolling()
+    self:restoreHTTPProxyBackup(true)
     self:execUninstallScript()
     -- The script only knows bin/ and /tmp; the private state dirs are ours.
     for _, dir in ipairs(PRIVATE_STATE_DIRS) do

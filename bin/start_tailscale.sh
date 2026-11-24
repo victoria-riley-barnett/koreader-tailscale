@@ -5,6 +5,7 @@
 
 BIN_DIR="${TS_BIN:-$(cd "$(dirname "$0")" && pwd)}"
 STATEDIR="${TS_STATEDIR:-$BIN_DIR}"
+LOGS_DIR="${TS_LOGS_DIR:-$STATEDIR/logs}"
 NETWORK_MODE="${TS_NETWORK_MODE:-unknown}"
 
 cd "$BIN_DIR" || exit 1
@@ -12,6 +13,37 @@ cd "$BIN_DIR" || exit 1
 # Ensure binaries exist
 [ -f ./tailscaled ] || exit 1
 [ -f ./tailscale ] || exit 1
+
+# Logs live in a root-only directory, never in BIN_DIR: `tailscale up` writes
+# the interactive login URL to its log, and on Kindle/Kobo/PocketBook BIN_DIR is
+# the user partition exported over USB, so a log there hands out the node's
+# login credential. Lua passes TS_LOGS_DIR (its private dir); the fallback sits
+# under the daemon's state dir, which is /tmp on the tmpfs path.
+umask 077
+mkdir -p "$LOGS_DIR" || exit 1
+chmod 700 "$LOGS_DIR" 2>/dev/null || true
+
+# Migrate logs an older build left in BIN_DIR. Prefer the newer copy of the two,
+# never clobber a newer log already in LOGS_DIR, and always drop the bin copy so
+# the credential stops being readable over USB.
+for _log in tailscaled.log tailscale.log; do
+    [ -f "$BIN_DIR/$_log" ] || continue
+    _newer=""
+    if [ -e "$LOGS_DIR/$_log" ]; then
+        # `test -nt` is not POSIX; `find -newer` is, and busybox has both.
+        _newer=$(find "$BIN_DIR/$_log" -newer "$LOGS_DIR/$_log" 2>/dev/null)
+    fi
+    if [ ! -e "$LOGS_DIR/$_log" ] || [ -n "$_newer" ]; then
+        if ! mv -f "$BIN_DIR/$_log" "$LOGS_DIR/$_log" 2>/dev/null; then
+            # mv can fail across a full tmpfs: keep what we can, but remove the
+            # bin copy regardless.
+            cp -f "$BIN_DIR/$_log" "$LOGS_DIR/$_log" 2>/dev/null || true
+            rm -f "$BIN_DIR/$_log"
+        fi
+    else
+        rm -f "$BIN_DIR/$_log"
+    fi
+done
 
 # Point TLS at a real CA bundle when one exists (Kindle: /mnt/us, Kobo: /mnt/onboard).
 # Never export a path that does not exist.
@@ -43,14 +75,22 @@ else
     sleep 2
 fi
 
-# Start daemon and record the selected networking mode before its own logs.
-printf 'Tailscale networking mode: %s\n' "$NETWORK_MODE" > tailscaled.log
+# Record the selected networking mode before the daemon's own logs. Append
+# rather than truncate, so a log migrated out of BIN_DIR above is not lost to
+# this run; roll it over so the tmpfs fallback cannot fill with old output.
+for _log in tailscaled.log tailscale.log; do
+    if [ -f "$LOGS_DIR/$_log" ] \
+        && [ "$(wc -c < "$LOGS_DIR/$_log" | tr -d ' \t')" -gt 65536 ]; then
+        : > "$LOGS_DIR/$_log"
+    fi
+done
+printf 'Tailscale networking mode: %s\n' "$NETWORK_MODE" >> "$LOGS_DIR/tailscaled.log"
 ./tailscaled \
     --statedir="$STATEDIR/" \
     ${TS_TUN_FLAG} \
     --socks5-server=127.0.0.1:1055 \
     --outbound-http-proxy-listen=127.0.0.1:1056 \
-    >> tailscaled.log 2>&1 &
+    >> "$LOGS_DIR/tailscaled.log" 2>&1 &
 
 # Kindle's firewall defaults to DROP, which silently discards everything that
 # arrives on or leaves through the TUN device. Only relevant to kernel TUN, and
@@ -101,6 +141,19 @@ set -f
 # shellcheck disable=SC2086
 set -- up $TS_UP_FLAGS
 set +f
+
+# DNS is the user's setting, not the plugin's. `up` refuses to run when a
+# stored non-default pref is omitted, so carry the daemon's current CorpDNS
+# value forward instead of choosing one. This makes `tailscale set
+# --accept-dns=...` stick across plugin restarts.
+_dns=""
+for _i in 1 2 3; do
+    _dns=$(./tailscale debug prefs 2>/dev/null \
+        | sed -n 's/.*"CorpDNS":[[:space:]]*\([a-z]*\).*/\1/p' | head -n1)
+    [ -n "$_dns" ] && break
+    sleep 1
+done
+[ -n "$_dns" ] && set -- "$@" "--accept-dns=$_dns"
 [ -n "$HOSTNAME" ] && set -- "$@" "--hostname=$HOSTNAME"
 # The key arrives as a root-only file on tmpfs, not as a value: argv shows in
 # `ps`, and an env var would be inherited by tailscaled for its whole lifetime.
@@ -113,14 +166,16 @@ else
 fi
 
 # Run in the background: without an auth key `tailscale up` blocks waiting for
-# interactive login. The plugin polls `tailscale status --json` for login state.
+# interactive login, and its stdout carries the login URL — a credential — so it
+# is appended to LOGS_DIR, which is root-only and off the USB-exported partition.
+# The plugin polls `tailscale status --json` for login state.
 # The staged key is deleted as soon as `up` returns, whatever the outcome.
 # On the tmpfs fallback, state is persisted right after a successful `up` so a
 # one-time auth key is not lost to a crash or reboot before the next stop. Only
 # the fallback marker allows this: elsewhere it would copy the node's private
 # keys back onto USB-exported storage.
 (
-    ./tailscale "$@" < /dev/null > tailscale.log 2>&1
+    ./tailscale "$@" < /dev/null >> "$LOGS_DIR/tailscale.log" 2>&1
     _up_rc=$?
     [ -n "$TS_AUTH_KEY_FILE" ] && rm -f "$TS_AUTH_KEY_FILE"
     if [ "$_up_rc" -eq 0 ] && [ -f "$STATEDIR/.copy_back_to_bin" ]; then

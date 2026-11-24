@@ -1,14 +1,15 @@
 # Tailscale Plugin for KOReader
 
+[![CI](https://github.com/victoria-riley-barnett/koreader-tailscale/actions/workflows/ci.yml/badge.svg)](https://github.com/victoria-riley-barnett/koreader-tailscale/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/victoria-riley-barnett/koreader-tailscale)](https://github.com/victoria-riley-barnett/koreader-tailscale/releases)
+
 A Tailscale client for KOReader, for cross-network syncing, SSH, and file sharing on e-readers.
 
-It was bothering me that I had to get my phone and Kindle onto the same network just to sync my Syncthing files (a key player in any open alternative that skips paid services or sync features locked in w/ library apps.
+It was bothering me that I had to get my phone and Kindle onto the same network just to sync my Syncthing files — a key player in any open alternative that skips paid services or sync features locked in w/ library apps. Checking which new IP my e-reader had picked up and using some service for it for a limited time is extremely inconvenient.
 
-Checking which new IP my e-reader had picked up (for something like the Filebrowser plugin), connecting this to some service (for a limited time, etc) was a lot of steps.
+This plugin aims to fix both issues, and did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, enabling [Syncthing](https://github.com/syncthing/syncthing), [SSH](https://github.com/koreader/koreader/wiki/SSH), and other file & library sync strategies to work across networks without extra configuration.
 
-This plugin aims to fix both & did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, enabling [Syncthing](https://github.com/syncthing/syncthing), [SSH](https://github.com/koreader/koreader/wiki/SSH), and other file & library sync strategies.
-
-Recently added support for Headscale, so some users can interface even more directly with their own services. I haven't set up my own yet, but there are setup examples in the [GH issues](https://github.com/victoria-riley-barnett/koreader-tailscale/issues), please create one if you have any problems.
+Recently added support for Headscale, I haven't set up my own yet, but there are setup examples in the [GH issues](https://github.com/victoria-riley-barnett/koreader-tailscale/issues), please create one if you have any problems.
 
 - **Always reachable.** Your e-reader gets a permanent Tailscale IP or Magic DNS, even when it's on a different Wi-Fi network (home, work, café)
 - **No hassle.** With a now more permanent identity, Syncthing, SSH, and other services:
@@ -18,6 +19,22 @@ Recently added support for Headscale, so some users can interface even more dire
 Most testing has been on Kindle, but we are able to generally implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior.
 
 Feedback and contributions are welcome!
+
+## What works
+
+What a device can do depends on whether it uses kernel TUN or userspace
+networking. The plugin picks the mode automatically.
+
+| Capability | Kernel TUN | Userspace networking |
+| --- | --- | --- |
+| Inbound to services on the device (Syncthing `:22000`, KOReader SSH `:2222`) | Yes | Yes — TCP is accepted and re-dialed to localhost |
+| Outbound from apps (KOReader, Syncthing) | Transparent | Only through the local proxy |
+| Tailscale SSH (`:22`) | Yes | Yes |
+| HTTP proxy `127.0.0.1:1056` | Optional | Required for outbound traffic |
+
+The full explanation — inbound and outbound paths, SSH, exit nodes, subnet
+routes, proxy ports, and where state and logs live — is in
+[docs/networking.md](docs/networking.md).
 
 ## Setup
 
@@ -90,15 +107,24 @@ To use a self-hosted Headscale server instead of the official control plane, go 
 
 ## Networking
 
-The plugin picks the networking mode supported by your device. If a device doesn't support kernel TUN, tailnet traffic from KOReader must go through the HTTP proxy.
+The plugin picks the networking mode the device supports. If a device has no usable kernel TUN, tailnet traffic from KOReader has to go through the local proxy. The mode matrix above and [docs/networking.md](docs/networking.md) describe both modes in full.
 
 ### Exit nodes
 
-Plugin config → Exit node: pick a node from the list or enter one manually. This applies on the next restart, which can be triggered by disconnecting in the plugin and then reconnecting.
+Plugin config → Exit node: pick a node from the list or enter one manually. This applies on the next connect (disconnect and reconnect in the plugin).
 
 ### HTTP proxy
 
-Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects, and restores the previous setting on disconnect.
+Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects, and restores the previous setting on disconnect or uninstall. The proxy is reconciled at each launch, so a crash cannot leave KOReader pointing at a dead port. `tailscaled` also offers SOCKS5 on `127.0.0.1:1055`.
+
+HTTPS over this proxy can hit an upstream KOReader bug:
+[koreader/koreader#14693](https://github.com/koreader/koreader/issues/14693).
+
+### Tailscale SSH
+
+Plugin config → **Enable Tailscale SSH** (`tailscale_ssh`, off by default) passes `--ssh`. `tailscaled` serves SSH on port `22` of the device's tailnet address, subject to your tailnet ACLs. It works in userspace mode as well as kernel TUN, and host keys live under `<state dir>/ssh/`, so no rootfs writes are needed.
+
+This is independent of KOReader's own SSH server, which normally listens on `2222`; both can run at once. From another tailnet machine, use `tailscale ssh <user>@<device>`, with a user your tailnet policy allows. `./tailscale status` shows the node either way.
 
 ### Userspace mode
 
@@ -110,7 +136,59 @@ With kernel TUN, KOReader gets transparent tailnet routing. Either mode carries 
 
 ### Subnet routes
 
-Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next start.
+Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next connect.
+
+## Troubleshooting
+
+**Connections time out; curl or ssh from a shell never routes; the device has no
+`/dev/net/tun`.** That device is in userspace mode, where host apps only get the
+tailnet through the local proxy. KOReader's own traffic uses it when Automatically
+configure HTTP proxy is on, but programs you run from a shell do not: pass the
+proxy explicitly (`curl -x http://127.0.0.1:1056 …`) or use a device with kernel
+TUN.
+
+**OPDS fails with "host or service not provided, or not known".** Turn on
+**Automatically configure HTTP proxy**; KOReader's HTTP requests then resolve names
+through Tailscale's proxy. As a fallback, enter the remote device's `100.x`
+address.
+
+**PocketBook shows "No network connectivity" on 1.3.0.** That version's
+connectivity preflight blocked startup on filtered networks. The preflight has been
+removed; upgrade to 1.4.1.
+
+**HTTPS fails through the HTTP proxy.** This is an upstream KOReader bug, not the
+plugin: [koreader/koreader#14693](https://github.com/koreader/koreader/issues/14693).
+Kernel TUN mode avoids the proxy entirely.
+
+## Testing
+
+```sh
+sh tests/run.sh       # shell scripts, run against fake tailscale/tailscaled/iptables binaries
+luajit tests/unit.lua # Lua unit tests, headless (also runs under Lua 5.1+)
+```
+
+`tests/run.sh` needs no device and no network: it puts the scripts in a temporary
+directory next to stub binaries and checks the behavior the plugin depends on.
+`tests/unit.lua` exercises the Lua side without KOReader. CI runs both, plus Lua
+syntax checks and shellcheck.
+
+## Design
+
+- **Lua decides, shell executes.** `main.lua` builds every `tailscaled` and
+  `tailscale` argument and passes it to `bin/*.sh` as quoted environment
+  variables. The scripts never re-parse a command string, so hostnames, auth
+  keys and Headscale URLs cannot turn into shell code.
+- **Node identity stays private.** `tailscaled.state` is kept off USB-exported
+  storage in a root-only directory, and logs (which can contain the login URL)
+  live beside it rather than in `bin/`.
+- **Login never blocks the UI.** `tailscale up` runs in the background; the
+  plugin polls `status --json` and shows the QR code only when asked.
+- **Networking mode is a capability check, not a device list.** Kernel TUN is
+  used when `/dev/net/tun` is usable, userspace otherwise, with an explicit
+  override for unstable kernels.
+- **Tests run without a device.** `tests/unit.lua` stubs KOReader and exercises
+  the decision logic under LuaJIT; `tests/run.sh` runs the scripts against fake
+  binaries.
 
 ## Credits
 

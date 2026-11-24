@@ -19,7 +19,9 @@ from elsewhere.
 
 With kernel TUN, KOReader can reach tailnet services directly. In userspace
 mode, configure KOReader's HTTP proxy as described in the README; exit-node
-routing then applies only to traffic sent through that proxy.
+routing then applies only to traffic sent through that proxy. The full mode
+matrix, SSH behavior, and state/log locations are in
+[networking.md](../networking.md).
 
 The plugin picks a mode based on the device's capabilities, not its name, so
 different models in the same product family may behave differently. The
