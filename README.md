@@ -3,55 +3,29 @@
 [![CI](https://github.com/victoria-riley-barnett/koreader-tailscale/actions/workflows/ci.yml/badge.svg)](https://github.com/victoria-riley-barnett/koreader-tailscale/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/victoria-riley-barnett/koreader-tailscale)](https://github.com/victoria-riley-barnett/koreader-tailscale/releases)
 
-A Tailscale client for KOReader, for cross-network syncing, SSH, and file sharing on e-readers.
+A tailscale client for KOReader, allowing you to connect your e-reader to your tailnet.
 
-It was bothering me that I had to get my phone and Kindle onto the same network just to sync my Syncthing files — a key player in any open alternative that skips paid services or sync features locked in w/ library apps. Checking which new IP my e-reader had picked up and using some service for it for a limited time is extremely inconvenient.
+I was extremely tired of looking up short lived ip addresses and reconfiguring sync plugins. This plugin addresses the disposability problem head-on, virtualizing a persistent network connection by allowing KOReader traffic to go  through Tailscale (or [Headscale](https://headscale.net)).
 
-This plugin aims to fix both issues, and did for me: it runs [Tailscale](https://tailscale.com) on your e-reader from inside KOReader, enabling [Syncthing](https://github.com/syncthing/syncthing), [SSH](https://github.com/koreader/koreader/wiki/SSH), and other file & library sync strategies to work across networks without extra configuration.
+This connection enables services like Syncthing and SSH to work seamlessly across your tailnet devices as you change networks.
 
-Recently added support for Headscale, I haven't set up my own yet, but there are setup examples in the [GH issues](https://github.com/victoria-riley-barnett/koreader-tailscale/issues), please create one if you have any problems.
+Most testing has been on two Kindles I own, but we are able to implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior.
 
-- **Always reachable.** Your e-reader gets a permanent Tailscale IP or Magic DNS, even when it's on a different Wi-Fi network (home, work, café)
-- **No hassle.** With a now more permanent identity, Syncthing, SSH, and other services:
-    - Can do their work regardless of where your two devices are
-    - Will be more reliable, and require less configuration (a great deal of potential opens up once you have both shell & file system access, ala [PuTTY](https://putty.org/index.html))
+I have not set up my own headscale instance, there are setup examples:
 
-Most testing has been on Kindle, but we are able to generally implement platform fixes (mostly file path variety or service swaps). See the [platform notes](docs/platforms/README.md) for device-specific paths and behavior.
-
-Feedback and contributions are welcome!
-
-## What works
-
-What a device can do depends on whether it uses kernel TUN or userspace
-networking. The plugin picks the mode automatically.
-
-| Capability | Kernel TUN | Userspace networking |
-| --- | --- | --- |
-| Inbound to services on the device (Syncthing `:22000`, KOReader SSH `:2222`) | Yes | Yes — TCP is accepted and re-dialed to localhost |
-| Outbound from apps (KOReader, Syncthing) | Transparent | Only through the local proxy |
-| Tailscale SSH (`:22`) | Yes | Yes |
-| HTTP proxy `127.0.0.1:1056` | Optional | Required for outbound traffic |
-
-The full explanation — inbound and outbound paths, SSH, exit nodes, subnet
-routes, proxy ports, and where state and logs live — is in
-[docs/networking.md](docs/networking.md).
+Please create an [issue](https://github.com/victoria-riley-barnett/koreader-tailscale/issues) if you have any problems. Feedback and contributions are welcome!
 
 ## Setup
-
-1. Tailscale account (a self-hosted [Headscale](https://headscale.net) server
-works too).
+1. Tailscale account (or a self-hosted [Headscale](https://headscale.net) server).
 2. Download the plugin from the
 [releases page](https://github.com/victoria-riley-barnett/koreader-tailscale/releases) and copy `tailscale.koplugin` into KOReader's `plugins` folder.
 3. Restart KOReader and tap Network → Tailscale VPN → Install/Update Tailscale.
-It downloads the right binaries for your device and checks them before installing.
-4. Sign in by scanning the QR code with your phone, or use an auth key.
+4. Sign in by scanning the QR code with your phone, or use an auth key file. See the [Sign in](#sign-in) section for details.
 
-### Pointing services at the device
-
-Put the e-reader's `ip:port` in the address fields. An example from my [syncthing client](https://apps.apple.com/us/app/synctrain/id6553985316) (iOS):
-
+### On your other devices
+Remember your ports! An example address in my [syncthing client](https://apps.apple.com/us/app/synctrain/id6553985316) on iOS:
 ```
-tcp://<tailscale-ip / magic-dns>:22000
+tcp://<kindle.tailscalestuffhere>:22000
 ```
 
 ## Installation
@@ -101,13 +75,22 @@ it with your phone to finish the approval process on Tailscale.
 - **Use an auth key** — place a key in the plugin's `bin/auth.key` file and tap
 **Check again**. The exact path varies by platform (on PocketBook the key does not live under the plugin directory); the table in the [platform notes](docs/platforms/README.md) lists each one.
 
-The file should contain only the key: `tskey-...` or `hskey-auth-...`. Once the device is signed in and its node state is stored persistently, the plugin deletes the file — the key is no longer needed, and `bin/` is readable over USB. The key is handed to `tailscale up` as a root-only file in `/tmp` rather than as an argument, so it does not show up in `ps`.
+The file should contain only the key: `tskey-...` or `hskey-auth-...`. 
+
+Once the device is signed in and its node state is stored persistently, the plugin deletes the file.
 
 To use a self-hosted Headscale server instead of the official control plane, go to Network setup → **Control plane** and enter your server URL.
 
 ## Networking
 
 The plugin picks the networking mode the device supports. If a device has no usable kernel TUN, tailnet traffic from KOReader has to go through the local proxy. The mode matrix above and [docs/networking.md](docs/networking.md) describe both modes in full.
+
+| Capability | Kernel TUN | Userspace networking |
+| --- | --- | --- |
+| Inbound to services on the device (Syncthing `:22000`, KOReader SSH `:2222`) | Yes | Yes — TCP is accepted and re-dialed to localhost |
+| Outbound from apps (KOReader, Syncthing) | Transparent | Only through the local proxy |
+| Tailscale SSH (`:22`) | Yes | Yes |
+| HTTP proxy `127.0.0.1:1056` | Optional | Required for outbound traffic |
 
 ### Exit nodes
 
@@ -116,9 +99,6 @@ Plugin config → Exit node: pick a node from the list or enter one manually. Th
 ### HTTP proxy
 
 Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects, and restores the previous setting on disconnect or uninstall. The proxy is reconciled at each launch, so a crash cannot leave KOReader pointing at a dead port. `tailscaled` also offers SOCKS5 on `127.0.0.1:1055`.
-
-HTTPS over this proxy can hit an upstream KOReader bug:
-[koreader/koreader#14693](https://github.com/koreader/koreader/issues/14693).
 
 ### Tailscale SSH
 
