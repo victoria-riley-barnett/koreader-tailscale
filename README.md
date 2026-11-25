@@ -36,54 +36,19 @@ tcp://<kindle.tailscalestuffhere>:22000
 3. Open Network → Tailscale VPN → Install/Update Tailscale. In reader mode,
 open the gear icon and go to Settings → Network → Tailscale VPN.
 
-### Manual installation
-
-If the automatic installation fails, install the binaries by hand.
-
-1. Download the binaries for your architecture (`arm` for ARMv7, `arm64` for
-ARM64) from [pkgs.tailscale.com/stable](https://pkgs.tailscale.com/stable/).
-
-   ```sh
-   wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz
-   wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz.sha256
-   echo "$(cat tailscale_<version>_arm.tgz.sha256)  tailscale_<version>_arm.tgz" | sha256sum -c
-   ```
-
-2. Transfer the archive to the device's plugin `bin` directory. See the
-[platform notes](docs/platforms/README.md) for common paths.
-
-   ```sh
-   scp -P 2222 tailscale_<version>_arm.tgz root@<device-ip>:/path/to/tailscale.koplugin/bin/
-   ```
-
-Then, on the device:
-
-   ```sh
-   cd /path/to/tailscale.koplugin/bin
-   tar xzf tailscale_<version>_arm.tgz
-   mv tailscale_*/tailscale tailscale_*/tailscaled ./
-   rm -rf tailscale_* tailscale_<version>_arm.tgz
-   chmod +x tailscale tailscaled
-   ```
-
-3. Start Tailscale from the plugin menu and sign in.
 
 ## Sign in
 
-- **Scan QR code** — shows a sign-in QR for pairing a new Tailscale device. Scan
-it with your phone to finish the approval process on Tailscale.
-- **Use an auth key** — place a key in the plugin's `bin/auth.key` file and tap
-**Check again**. The exact path varies by platform (on PocketBook the key does not live under the plugin directory); the table in the [platform notes](docs/platforms/README.md) lists each one.
+- Scan QR code: show a sign-in QR for pairing a new Tailscale device, it's tailscale's own check-in flow.
+- Auth key: place a key in the plugin's `bin/auth.key` file and tap the connection button. 
+   - The exact path varies by [platform](docs/platforms/README.md).
 
 The file should contain only the key: `tskey-...` or `hskey-auth-...`. 
 
-Once the device is signed in and its node state is stored persistently, the plugin deletes the file.
+### Networking
+The plugin picks the networking mode the device supports. If a device has no usable kernel TUN, tailnet traffic from KOReader has to go through the local proxy. The mode matrix above and [docs/networking.md](docs/networking.md) describe both modes in full.
 
 To use a self-hosted Headscale server instead of the official control plane, go to Network setup → **Control plane** and enter your server URL.
-
-## Networking
-
-The plugin picks the networking mode the device supports. If a device has no usable kernel TUN, tailnet traffic from KOReader has to go through the local proxy. The mode matrix above and [docs/networking.md](docs/networking.md) describe both modes in full.
 
 | Capability | Kernel TUN | Userspace networking |
 | --- | --- | --- |
@@ -92,83 +57,37 @@ The plugin picks the networking mode the device supports. If a device has no usa
 | Tailscale SSH (`:22`) | Yes | Yes |
 | HTTP proxy `127.0.0.1:1056` | Optional | Required for outbound traffic |
 
-### Exit nodes
+### Manual installation
 
-Plugin config → Exit node: pick a node from the list or enter one manually. This applies on the next connect (disconnect and reconnect in the plugin).
+If the automatic installation fails, install the binaries by hand.
 
-### HTTP proxy
-
-Plugin config → Automatically configure HTTP proxy sets KOReader's HTTP proxy to `http://127.0.0.1:1056` when the device connects, and restores the previous setting on disconnect or uninstall. The proxy is reconciled at each launch, so a crash cannot leave KOReader pointing at a dead port. `tailscaled` also offers SOCKS5 on `127.0.0.1:1055`.
-
-### Tailscale SSH
-
-Plugin config → **Enable Tailscale SSH** (`tailscale_ssh`, off by default) passes `--ssh`. `tailscaled` serves SSH on port `22` of the device's tailnet address, subject to your tailnet ACLs. It works in userspace mode as well as kernel TUN, and host keys live under `<state dir>/ssh/`, so no rootfs writes are needed.
-
-This is independent of KOReader's own SSH server, which normally listens on `2222`; both can run at once. From another tailnet machine, use `tailscale ssh <user>@<device>`, with a user your tailnet policy allows. `./tailscale status` shows the node either way.
-
-### Userspace mode
-
-Plugin config → Force userspace mode selects the alternate networking mode; use it when kernel TUN is unstable on your device. Takes effect on the next start.
-
-In userspace mode, enable Automatically configure HTTP proxy in Plugin config, or set Settings → Network → Proxy to `http://127.0.0.1:1056`. Exit-node routing in this mode applies only to traffic sent through the proxy.
-
-With kernel TUN, KOReader gets transparent tailnet routing. Either mode carries file sync via [koreader-syncthing](https://github.com/jasonchoimtt/koreader-syncthing).
-
-### Subnet routes
-
-Plugin config → Accept subnet routes (on by default) lets the device reach networks that a subnet router advertises to the tailnet. Turn it off if one of those routes covers the device's own LAN: accepted routes take priority over the local network, so the device stops answering on its LAN address while Tailscale is connected. Takes effect on the next connect.
-
-## Troubleshooting
-
-**Connections time out; curl or ssh from a shell never routes; the device has no
-`/dev/net/tun`.** That device is in userspace mode, where host apps only get the
-tailnet through the local proxy. KOReader's own traffic uses it when Automatically
-configure HTTP proxy is on, but programs you run from a shell do not: pass the
-proxy explicitly (`curl -x http://127.0.0.1:1056 …`) or use a device with kernel
-TUN.
-
-**OPDS fails with "host or service not provided, or not known".** Turn on
-**Automatically configure HTTP proxy**; KOReader's HTTP requests then resolve names
-through Tailscale's proxy. As a fallback, enter the remote device's `100.x`
-address.
-
-**PocketBook shows "No network connectivity" on 1.3.0.** That version's
-connectivity preflight blocked startup on filtered networks. The preflight has been
-removed; upgrade to 1.4.1.
-
-**HTTPS fails through the HTTP proxy.** This is an upstream KOReader bug, not the
-plugin: [koreader/koreader#14693](https://github.com/koreader/koreader/issues/14693).
-Kernel TUN mode avoids the proxy entirely.
-
-## Testing
+1. Download the binaries for your architecture (`arm` for ARMv7, `arm64` for
+ARM64) from [pkgs.tailscale.com/stable](https://pkgs.tailscale.com/stable/).
 
 ```sh
-sh tests/run.sh       # shell scripts, run against fake tailscale/tailscaled/iptables binaries
-luajit tests/unit.lua # Lua unit tests, headless (also runs under Lua 5.1+)
+wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz
+wget https://pkgs.tailscale.com/stable/tailscale_<version>_arm.tgz.sha256
+echo "$(cat tailscale_<version>_arm.tgz.sha256)  tailscale_<version>_arm.tgz" | sha256sum -c
 ```
 
-`tests/run.sh` needs no device and no network: it puts the scripts in a temporary
-directory next to stub binaries and checks the behavior the plugin depends on.
-`tests/unit.lua` exercises the Lua side without KOReader. CI runs both, plus Lua
-syntax checks and shellcheck.
+2. Transfer the archive to the device's plugin `bin` directory. See the
+[platform notes](docs/platforms/README.md) for common paths.
 
-## Design
+```sh
+scp -P 2222 tailscale_<version>_arm.tgz root@<device-ip>:/path/to/tailscale.koplugin/bin/
+```
 
-- **Lua decides, shell executes.** `main.lua` builds every `tailscaled` and
-  `tailscale` argument and passes it to `bin/*.sh` as quoted environment
-  variables. The scripts never re-parse a command string, so hostnames, auth
-  keys and Headscale URLs cannot turn into shell code.
-- **Node identity stays private.** `tailscaled.state` is kept off USB-exported
-  storage in a root-only directory, and logs (which can contain the login URL)
-  live beside it rather than in `bin/`.
-- **Login never blocks the UI.** `tailscale up` runs in the background; the
-  plugin polls `status --json` and shows the QR code only when asked.
-- **Networking mode is a capability check, not a device list.** Kernel TUN is
-  used when `/dev/net/tun` is usable, userspace otherwise, with an explicit
-  override for unstable kernels.
-- **Tests run without a device.** `tests/unit.lua` stubs KOReader and exercises
-  the decision logic under LuaJIT; `tests/run.sh` runs the scripts against fake
-  binaries.
+Then, on the device:
+
+```sh
+cd /path/to/tailscale.koplugin/bin
+tar xzf tailscale_<version>_arm.tgz
+mv tailscale_*/tailscale tailscale_*/tailscaled ./
+rm -rf tailscale_* tailscale_<version>_arm.tgz
+chmod +x tailscale tailscaled
+```
+
+3. Start Tailscale from the plugin menu and sign in.
 
 ## Credits
 
