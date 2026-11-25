@@ -74,7 +74,7 @@ jobs:
           # Ship only the plugin: main.lua, _meta.lua, bin/.
           rsync -a \
             --exclude='.git' --exclude='.claude' --exclude='.github' \
-            --exclude='tests' \
+            --exclude='tests' --exclude='docs' \
             --exclude='*.md' --exclude='*.zip' --exclude='LICENSE' \
             --exclude='.gitignore' \
             . /tmp/build/tailscale.koplugin/
