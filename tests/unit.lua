@@ -218,17 +218,6 @@ package.preload["dispatcher"] = function()
     return D
 end
 
--- Records what the plug-in sets on KOReader's proxy.
-local proxy_calls = {}
-package.preload["ui/network/manager"] = function()
-    return {
-        setHTTPProxy = function(_, value)
-            if value == nil then value = false end
-            proxy_calls[#proxy_calls + 1] = value
-        end,
-    }
-end
-
 G_reader_settings = { readSetting = function() return nil end }
 
 local Plugin = dofile(root .. "/main.lua")
@@ -310,88 +299,6 @@ do
     check("summary: empty body is nil", p:summaryFromStatusJSON("") == nil)
 end
 
--- ─── proxy lifecycle ─────────────────────────────────────────────
-
-do
-    local old_reader = G_reader_settings
-    -- KOReader's live proxy value: the reconcile path has to know whether the
-    -- device is actually pointed at our proxy or at a stale leftover.
-    local function reader_proxy(value)
-        G_reader_settings = { readSetting = function(_, key)
-            if key == "http_proxy" then return value end
-            if key == "http_proxy_enabled" then return value ~= nil end
-        end }
-    end
-
-    local p = new_plugin()
-    p.settings:saveSetting("http_proxy_backup_active", true)
-    p.settings:saveSetting("http_proxy_backup_enabled", true)
-    p.settings:saveSetting("http_proxy_backup_value", "http://old.example:8080")
-    p.getBackendState = function() return "Stopped" end
-    reader_proxy("http://127.0.0.1:1056")
-    proxy_calls = {}
-    p:reconcileHTTPProxy()
-    check("reconcile restores a stranded proxy",
-        #proxy_calls == 1 and proxy_calls[1] == "http://old.example:8080"
-            and p.settings:readSetting("http_proxy_backup_active") == false,
-        #proxy_calls .. " call(s)")
-
-    local q = new_plugin()
-    q.settings:saveSetting("http_proxy_backup_active", true)
-    q.getBackendState = function() return "Running" end
-    reader_proxy("http://127.0.0.1:1056")
-    proxy_calls = {}
-    q:reconcileHTTPProxy()
-    check("reconcile leaves a live proxy alone",
-        #proxy_calls == 0 and q.settings:readSetting("http_proxy_backup_active") == true,
-        #proxy_calls .. " call(s)")
-
-    local r = new_plugin()
-    r.settings:saveSetting("http_proxy_backup_active", false)
-    r.getBackendState = function() error("must not ask the daemon") end
-    proxy_calls = {}
-    r:reconcileHTTPProxy()
-    check("reconcile is free when no backup is active", #proxy_calls == 0)
-
-    -- A stale backup that contains our own proxy must restore to "off", not
-    -- re-apply 1056.
-    local s = new_plugin()
-    s.settings:saveSetting("http_proxy_backup_active", true)
-    s.settings:saveSetting("http_proxy_backup_enabled", true)
-    s.settings:saveSetting("http_proxy_backup_value", "http://127.0.0.1:1056/")
-    s.getBackendState = function() return "Stopped" end
-    reader_proxy("http://127.0.0.1:1056")
-    proxy_calls = {}
-    s:reconcileHTTPProxy()
-    check("stale self-proxy backup restores to no proxy",
-        #proxy_calls == 1 and proxy_calls[1] == false, tostring(proxy_calls[1]))
-
-    -- If the proxy is already off, a leftover backup must be forgotten, not
-    -- restored, and the daemon must not even be queried.
-    local u = new_plugin()
-    u.settings:saveSetting("http_proxy_backup_active", true)
-    u.settings:saveSetting("http_proxy_backup_enabled", true)
-    u.settings:saveSetting("http_proxy_backup_value", "http://old.example:8080")
-    u.getBackendState = function() error("must not ask the daemon") end
-    reader_proxy(nil)
-    proxy_calls = {}
-    u:reconcileHTTPProxy()
-    check("stale backup is dropped when the proxy is already off",
-        #proxy_calls == 0 and u.settings:readSetting("http_proxy_backup_active") == false,
-        #proxy_calls .. " call(s)")
-
-    -- Saving a backup while KOReader already points at our proxy must not
-    -- record our URL as the user's value.
-    local t = new_plugin()
-    reader_proxy("http://127.0.0.1:1056")
-    t:saveHTTPProxyBackup()
-    check("backup treats an already-set tailscale proxy as off",
-        t.settings:readSetting("http_proxy_backup_enabled") == false
-            and t.settings:readSetting("http_proxy_backup_value") == "",
-        tostring(t.settings:readSetting("http_proxy_backup_value")))
-    G_reader_settings = old_reader
-end
-
 -- ─── dispatcher toggle ──────────────────────────────────────────
 
 do
@@ -412,7 +319,6 @@ do
     local ev = {}
     q.stopLoginPolling = function() ev[#ev + 1] = "stop-poll" end
     q.execStopScript = function() ev[#ev + 1] = "stop-daemon" end
-    q.restoreHTTPProxyBackup = function() end
     q:disconnectTailscale()
     check("disconnect stops polling before the daemon",
         ev[1] == "stop-poll" and ev[2] == "stop-daemon", table.concat(ev, ","))

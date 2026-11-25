@@ -14,7 +14,6 @@ local Dispatcher = require("dispatcher")
 local TailscalePlugin = WidgetContainer:extend{
     name = "tailscale",
     is_doc_only = false,
-    http_proxy_url = "http://127.0.0.1:1056",
 }
 
 -- Login handshake: the daemon answers `tailscale status --json` immediately
@@ -77,8 +76,6 @@ function TailscalePlugin:init()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/tailscale.lua")
     self.settings:readSetting("use_exit_node", false)
     self.settings:readSetting("exit_node", "")
-    self.settings:readSetting("auto_http_proxy", false)
-    self.settings:readSetting("http_proxy_backup_active", false)
     self.settings:readSetting("force_userspace", false)
     self.settings:readSetting("accept_routes", true)
     self.settings:readSetting("tailscale_ssh", false)
@@ -99,10 +96,6 @@ function TailscalePlugin:init()
     if not self:resumeAfterUSBMS() then
         self:autoStartTailscale()
     end
-
-    -- A crash or a USBMS exit can leave KOReader's proxy pointing at a daemon
-    -- that is gone, which breaks networking even though Tailscale looks off.
-    self:reconcileHTTPProxy()
 end
 
 --- Stop Tailscale before KOReader enters USB storage mode, then auto-restart afterwards.
@@ -135,9 +128,6 @@ function TailscalePlugin:installUSBMSHook()
                     f:close()
                 end
                 -- Synchronous: the filesystem must be free before the USBMS tool unmounts it.
-                -- The HTTP proxy is deliberately left alone here: KOReader restarts
-                -- cold after USBMS, and init()'s reconcileHTTPProxy() then sees a
-                -- backup with no Running daemon and puts the user's proxy back.
                 os.execute("TS_BIN=" .. TailscalePlugin:shellQuote(ts_bin) .. " sh "
                     .. TailscalePlugin:shellQuote(plugin_dir .. "/bin/stop_tailscale.sh"))
             end
@@ -195,27 +185,7 @@ function TailscalePlugin:autoStartTailscale()
         if not self:isRunning() then
             self:startDaemon()
         end
-        -- The launch path skips connectTailscale(), so nothing else would
-        -- apply the HTTP proxy once the node is connected (#52).
-        self:applyProxyWhenConnected(0)
     end)
-end
-
---- Apply the auto HTTP proxy once the node reports Running, polling for a
--- while because the daemon may still be coming up. Stops quietly if the user
--- left Tailscale off.
-function TailscalePlugin:applyProxyWhenConnected(tries)
-    if not self.settings:readSetting("auto_http_proxy") then
-        return
-    end
-    self:invalidateBackendState()
-    if self:getBackendState() == "Running" then
-        self:enableHTTPProxyIfNeeded()
-    elseif tries < 20 then
-        UIManager:scheduleIn(3, function()
-            self:applyProxyWhenConnected(tries + 1)
-        end)
-    end
 end
 
 -- ─── path helpers ─────────────────────────────────────────────────
@@ -551,8 +521,8 @@ function TailscalePlugin:resolveTunFlag()
     --   * inbound peers look like they came from localhost, which is why the
     --     daemon sees 127.0.0.1 rather than the tailnet address;
     --   * routing an exit node is never transparent — it only works for traffic
-    --     sent through the SOCKS5/HTTP proxy on 1055/1056, which is the whole
-    --     reason this plugin configures KOReader's proxy at all.
+    --     sent through the SOCKS5/HTTP proxy on 1055/1056, which KOReader is not
+    --     configured for: pointing it at a proxy is the user's call.
     -- Kernel TUN has neither limitation, hence the preference for it.
     if self:isUserspaceForced() then
         self._tun_flag = "--tun=userspace-networking"
@@ -712,142 +682,6 @@ function TailscalePlugin:execUninstallScript()
         .. self:shellQuote(self.plugin_dir .. "/bin/uninstall-tailscale.sh"))
 end
 
--- ─── HTTP proxy management ────────────────────────────────────────
-
-function TailscalePlugin:getNetworkManager()
-    local ok, network_mgr = pcall(require, "ui/network/manager")
-    if ok then
-        return network_mgr
-    end
-    logger.warn("Tailscale plugin: failed to load NetworkMgr for HTTP proxy management")
-    return nil
-end
-
---- Compare proxy URLs the way the settings store writes them: trailing
--- whitespace and slashes are not meaningful, and an empty value is "no proxy".
-local function sameProxy(a, b)
-    a = tostring(a or ""):gsub("%s+$", ""):gsub("/+$", "")
-    b = tostring(b or ""):gsub("%s+$", ""):gsub("/+$", "")
-    return a ~= "" and a == b
-end
-
-function TailscalePlugin:saveHTTPProxyBackup()
-    local active = self.settings:readSetting("http_proxy_backup_active")
-    local saved_value = self.settings:readSetting("http_proxy_backup_value") or ""
-    -- A backup that points at our own proxy is not the user's setting: it is a
-    -- leftover from a crash or an older build. Re-saving it as "off" is what
-    -- makes a later restore actually remove the proxy.
-    if active and not sameProxy(saved_value, self.http_proxy_url) then
-        return
-    end
-
-    local enabled = G_reader_settings:readSetting("http_proxy_enabled") and true or false
-    local value = G_reader_settings:readSetting("http_proxy") or ""
-    if sameProxy(value, self.http_proxy_url) then
-        enabled, value = false, ""
-    end
-    self.settings:saveSetting("http_proxy_backup_enabled", enabled)
-    self.settings:saveSetting("http_proxy_backup_value", value)
-    self.settings:saveSetting("http_proxy_backup_active", true)
-    self:flushSettings()
-end
-
-function TailscalePlugin:enableHTTPProxyIfNeeded()
-    if not self.settings:readSetting("auto_http_proxy") then
-        return
-    end
-
-    local network_mgr = self:getNetworkManager()
-    if not network_mgr or not network_mgr.setHTTPProxy then
-        UIManager:show(InfoMessage:new{
-            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
-            timeout = 5
-        })
-        return
-    end
-
-    self:saveHTTPProxyBackup()
-    local ok = pcall(function()
-        network_mgr:setHTTPProxy(self.http_proxy_url)
-    end)
-    if not ok then
-        self:restoreHTTPProxyBackup(true)
-        UIManager:show(InfoMessage:new{
-            text = _("Tailscale connected, but KOReader HTTP proxy could not be configured."),
-            timeout = 5
-        })
-    end
-end
-
-function TailscalePlugin:restoreHTTPProxyBackup(silent)
-    if not self.settings:readSetting("http_proxy_backup_active") then
-        return
-    end
-
-    local network_mgr = self:getNetworkManager()
-    if not network_mgr or not network_mgr.setHTTPProxy then
-        if not silent then
-            UIManager:show(InfoMessage:new{
-                text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
-                timeout = 5
-            })
-        end
-        return
-    end
-
-    local backup_enabled = self.settings:readSetting("http_proxy_backup_enabled")
-    local backup_value = self.settings:readSetting("http_proxy_backup_value") or ""
-    -- Older builds could save our own proxy as the "previous" value. Restoring
-    -- that would re-apply 1056, so treat it as "no proxy" instead.
-    if sameProxy(backup_value, self.http_proxy_url) then
-        backup_enabled, backup_value = false, ""
-    end
-    local ok = pcall(function()
-        if backup_enabled and backup_value ~= "" then
-            network_mgr:setHTTPProxy(backup_value)
-        else
-            network_mgr:setHTTPProxy(nil)
-        end
-    end)
-
-    if ok then
-        self.settings:saveSetting("http_proxy_backup_active", false)
-        self.settings:delSetting("http_proxy_backup_enabled")
-        self.settings:delSetting("http_proxy_backup_value")
-        self:flushSettings()
-    elseif not silent then
-        UIManager:show(InfoMessage:new{
-            text = _("Tailscale disconnected, but KOReader HTTP proxy could not be restored."),
-            timeout = 5
-        })
-    end
-end
-
---- A backup with no Running daemon behind it means the proxy outlived the
--- connection (crash, USBMS exit, uninstall). Undo it so KOReader is not left
--- sending every request to a port nothing listens on.
-function TailscalePlugin:reconcileHTTPProxy()
-    if not self.settings or not self.settings:readSetting("http_proxy_backup_active") then
-        return
-    end
-    -- KOReader no longer has our proxy enabled: the backup is stale (the user
-    -- turned the proxy off). Forget it rather than restoring a value that is
-    -- not in use.
-    local enabled = G_reader_settings and G_reader_settings:readSetting("http_proxy_enabled") and true or false
-    local current = G_reader_settings and G_reader_settings:readSetting("http_proxy") or ""
-    if not enabled or not sameProxy(current, self.http_proxy_url) then
-        self.settings:saveSetting("http_proxy_backup_active", false)
-        self.settings:delSetting("http_proxy_backup_enabled")
-        self.settings:delSetting("http_proxy_backup_value")
-        self:flushSettings()
-        return
-    end
-    self:invalidateBackendState()
-    if self:getBackendState() ~= "Running" then
-        self:restoreHTTPProxyBackup(true)
-    end
-end
-
 -- ─── login (non-blocking) ─────────────────────────────────────────
 
 --- Read BackendState and AuthURL straight out of `tailscale status --json`.
@@ -916,7 +750,6 @@ function TailscalePlugin:onLoginComplete()
         self._sign_in_qr = nil
         signed_in_interactively = true
     end
-    self:enableHTTPProxyIfNeeded()
     if self._up_auth_key_file and self:forgetAuthKey() then
         UIManager:show(InfoMessage:new{
             text = _("Tailscale connected.\nThe auth key was deleted from the device; it is no longer needed."),
@@ -1208,35 +1041,6 @@ function TailscalePlugin:addToMainMenu(menu_items)
                         callback = function() self:configureExitNode() end,
                     },
                     {
-                        text = _("Automatically configure HTTP proxy"),
-                        keep_menu_open = true,
-                        help_text = _("Needed for userspace networking; kernel TUN needs no proxy.\nApplies now, and is restored on disconnect or uninstall."),
-                        checked_func = function()
-                            return self.settings and self.settings:readSetting("auto_http_proxy")
-                        end,
-                        callback = function(touchmenu_instance)
-                            local enable = not self.settings:readSetting("auto_http_proxy")
-                            self.settings:saveSetting("auto_http_proxy", enable)
-                            self:flushSettings()
-                            if enable then
-                                -- Only touch the proxy when the node is up;
-                                -- otherwise the connect path applies it when the
-                                -- backend reaches Running.
-                                self:invalidateBackendState()
-                                if self:getBackendState() == "Running" then
-                                    self:enableHTTPProxyIfNeeded()
-                                end
-                            else
-                                -- Turning the setting off must undo the proxy it
-                                -- installed, not wait for a disconnect.
-                                self:restoreHTTPProxyBackup(true)
-                            end
-                            if touchmenu_instance and touchmenu_instance.updateItems then
-                                touchmenu_instance:updateItems()
-                            end
-                        end
-                    },
-                    {
                         text = _("Force userspace mode"),
                         keep_menu_open = true,
                         checked_func = function()
@@ -1400,7 +1204,6 @@ function TailscalePlugin:disconnectTailscale()
     self:stopLoginPolling()
     self:execStopScript()
     self:invalidateBackendState()
-    self:restoreHTTPProxyBackup()
     UIManager:show(InfoMessage:new{ text = _("Tailscale disconnected"), timeout = 2 })
 end
 
@@ -1669,9 +1472,8 @@ function TailscalePlugin:uninstallTailscale()
         text = _("Uninstalling Tailscale..."),
         timeout = 2,
     })
-    -- Nothing must be left polling or proxying once the binaries are gone.
+    -- Nothing must be left polling once the binaries are gone.
     self:stopLoginPolling()
-    self:restoreHTTPProxyBackup(true)
     self:execUninstallScript()
     -- The script only knows bin/ and /tmp; the private state dirs are ours.
     for _, dir in ipairs(PRIVATE_STATE_DIRS) do
